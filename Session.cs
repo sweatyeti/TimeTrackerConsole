@@ -1,10 +1,11 @@
 using Spectre.Console;
+using System.Collections.Concurrent;
 
 internal class Session
 {
     private Session() { }
 
-    private List<TimeEntry> _timeEntries = new(10);
+    private readonly ConcurrentDictionary<int, TimeEntry> _timeEntries = new();
 
     public string Name { get; set; } = string.Empty;
     public bool IsActive {get; private set;} = false;
@@ -22,9 +23,6 @@ internal class Session
 
         // create and populate the first time entry
         session.StartNewEntry();
-
-        // flip the active switch to true
-        session.IsActive = true;
 
         return session;
     }
@@ -57,7 +55,6 @@ internal class Session
             .BorderColor(Color.DarkOrange)
             .Title($"[cyan bold]{Name}[/]");
 
-        //table.AddColumns("Id", "Start Time", "End Time", "Task", "Description");
         table.AddColumn("Id");
         table.AddColumn("Start Time", col => col.Centered());
         table.AddColumn("End Time", col => col.Centered());
@@ -65,13 +62,11 @@ internal class Session
         table.AddColumn("Logged", col => col.Centered());
         table.AddColumn("Description");
 
-        for(byte i = 0; i < _timeEntries.Count; i++)
+        for(int i = 1; i <= TimeEntry.LatestAssignedID; i++)
         {
-            TimeEntry? entry = _timeEntries[i];
-            if(entry is null)
-            {
-                continue;
-            }
+            bool exists = _timeEntries.TryGetValue(i, out TimeEntry? entry);
+            if(!exists || entry is null) continue;
+            
             table.AddRow(entry.Id.ToString(), entry.StartTime.ToString("yyyy-MM-dd HH:mm:ss"), entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm:ss") : "In Progress", entry.Task, entry.Logged ? "yes" : "no", entry.Description);
         }
 
@@ -81,7 +76,8 @@ internal class Session
     // ref: https://github.com/sweatyeti/MyTimeTracker/blob/main/BlazorTimeKeeper/Components/Pages/Home.razor
     private void DisplaySummary()
     {
-        if(_timeEntries.Count == 0 || (_timeEntries.Count == 1 && !_timeEntries[0].IsComplete))
+        // if there are no entries or just one entry with no task assigned, skip showing the summary section
+        if(_timeEntries.IsEmpty || (_timeEntries.Count == 1 && _timeEntries.Single().Value.Task == string.Empty)) 
         {
             return;
         }
@@ -94,7 +90,7 @@ internal class Session
         table.AddColumns("Task", "Entry Count", "Unlogged Time (hh:mm)", "Total Time (hh:mm)");
 
         var taskQuery = 
-            from entry in _timeEntries
+            from entry in _timeEntries.Values
             where entry.IsComplete == true
             group entry by entry.Task.ToLower() into taskGroup
             select new
@@ -168,21 +164,19 @@ internal class Session
 
     private void StartNewEntry()
     {
-        _timeEntries.Add(TimeEntry.GetNextEntry());
-        IsActive = true;
+        TimeEntry newEntry = TimeEntry.GetNextEntry();
+        IsActive = _timeEntries.TryAdd(newEntry.Id, newEntry);
     }
 
     private void StopCurrentEntry()
     {
         if(_timeEntries.Count == 0 || !IsActive) return;
 
-        TimeEntry currentEntry = _timeEntries[^1];
-        if(currentEntry.EndTime == DateTime.MinValue)
-        {
-            currentEntry.EndTime = DateTime.Now;
-            currentEntry.IsComplete = true;
-        }
+        TimeEntry currentEntry = _timeEntries[TimeEntry.LatestAssignedID];
+        if(currentEntry.IsComplete) return;
 
+        currentEntry.EndTime = DateTime.Now;
+        currentEntry.IsComplete = true;
         IsActive = false;
     }
 
@@ -196,7 +190,7 @@ internal class Session
 
         SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
             .Title("Select an entry to update:")
-            .AddChoices(_timeEntries)
+            .AddChoices(_timeEntries.Values)
             .UseConverter(entry => $"Id: {entry.Id} {entry.Task} ({entry.StartTime:yyyy-MM-dd HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm:ss") : "In Progress")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})");
 
         TimeEntry selectedEntry = AnsiConsole.Prompt(entryPrompt);
@@ -234,7 +228,7 @@ internal class Session
     private void LogTaskGroupFlow()
     {
         // get distinct task groups from entries
-        IEnumerable<string> taskGroups = _timeEntries
+        IEnumerable<string> taskGroups = _timeEntries.Values
             .Where(entry => !string.IsNullOrEmpty(entry.Task))
             .Select(entry => entry.Task)
             .Distinct();
@@ -249,11 +243,11 @@ internal class Session
         SelectionPrompt<string> taskGroupPrompt = new SelectionPrompt<string>()
             .Title("Select a task group to log:")
             .AddChoices(taskGroups)
-            .UseConverter(taskGroup => $"{taskGroup} ({_timeEntries.Count(entry => entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase))} entries)");
+            .UseConverter(taskGroup => $"{taskGroup} ({_timeEntries.Values.Count(entry => entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase))} entries)");
 
         string selectedTaskGroup = AnsiConsole.Prompt(taskGroupPrompt);
 
-        IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Where(entry => entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
+        IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Values.Where(entry => entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
 
         foreach(var entry in entriesInTaskGroup)
         {
@@ -271,7 +265,7 @@ internal class Session
 
         SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
             .Title("Select an entry to delete:")
-            .AddChoices(_timeEntries)
+            .AddChoices(_timeEntries.Values)
             .UseConverter(entry => $"Id: {entry.Id} {entry.Task} ({entry.StartTime:yyyy-MM-dd HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm:ss") : "In Progress")})");
         TimeEntry selectedEntry = AnsiConsole.Prompt(entryPrompt);
 
@@ -281,11 +275,11 @@ internal class Session
         }
 
         // if the entry being deleted is currently active, flip the session's active switch to false before deleting the entry
-        if(selectedEntry == _timeEntries[^1] && IsActive && selectedEntry.EndTime == DateTime.MinValue)
+        if(selectedEntry == _timeEntries[TimeEntry.LatestAssignedID] && IsActive && !selectedEntry.IsComplete)
         {
             IsActive = false;
         }
-        _timeEntries.Remove(selectedEntry);
+        _ = _timeEntries.TryRemove(selectedEntry.Id, out _);
     }
 
     // IN PROGRESS
