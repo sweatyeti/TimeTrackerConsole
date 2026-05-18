@@ -165,6 +165,11 @@ internal class Session
     private void StartNewEntry()
     {
         TimeEntry newEntry = TimeEntry.GetNextEntry();
+        TextPrompt<string> entryTaskPrompt = new TextPrompt<string>("Entry started, enter a task if desired:")
+            .AllowEmpty()
+            .ShowDefaultValue(false);
+        string entryTask = AnsiConsole.Prompt(entryTaskPrompt);
+        newEntry.Task = entryTask.Trim();
         IsActive = _timeEntries.TryAdd(newEntry.Id, newEntry);
     }
 
@@ -195,7 +200,9 @@ internal class Session
 
         TimeEntry selectedEntry = AnsiConsole.Prompt(entryPrompt);
 
-        TextPrompt<bool> isItLoggedPrompt = new TextPrompt<bool>($"Is this entry logged? (current: {(selectedEntry.Logged ? "yes" : "no")})")
+        if(selectedEntry.IsComplete && !String.IsNullOrEmpty(selectedEntry.Task))
+        {
+            TextPrompt<bool> isItLoggedPrompt = new TextPrompt<bool>($"Is this entry logged? (current: {(selectedEntry.Logged ? "yes" : "no")})")
             .AddChoice(true)
             .AddChoice(false)
             .DefaultValue(selectedEntry.Logged)
@@ -206,8 +213,9 @@ internal class Session
                 false => "n"
             });
 
-        bool isItLogged = AnsiConsole.Prompt(isItLoggedPrompt);
-        selectedEntry.Logged = isItLogged;
+            bool isItLogged = AnsiConsole.Prompt(isItLoggedPrompt);
+            selectedEntry.Logged = isItLogged;
+        }
 
         TextPrompt<string> updatedEntryTaskPrompt = new TextPrompt<string>($"Update entry's task (current: {selectedEntry.Task}):")
             .AllowEmpty()
@@ -249,8 +257,9 @@ internal class Session
 
         IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Values.Where(entry => entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
 
-        foreach(var entry in entriesInTaskGroup)
+        foreach(TimeEntry entry in entriesInTaskGroup)
         {
+            if(!entry.IsComplete) continue; // skip in progress entries, only log completed entries
             entry.Logged = true;
         }
     }
