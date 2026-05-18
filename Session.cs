@@ -76,24 +76,12 @@ internal class Session
     // ref: https://github.com/sweatyeti/MyTimeTracker/blob/main/BlazorTimeKeeper/Components/Pages/Home.razor
     private void DisplaySummary()
     {
-        // if there are no entries or just one entry with no task assigned, or one in-progress entry then skip showing the summary section
-        if(_timeEntries.IsEmpty 
-        || (_timeEntries.Count == 1 
-             && (_timeEntries.Single().Value.Task == string.Empty || !_timeEntries.Single().Value.IsComplete)))
-        {
-            return;
-        }
-
-        Table table = new Table()
-            .MarkdownBorder()
-            .BorderColor(Color.Blue)
-            .Title("[cyan bold]Summary[/]");
-
-        table.AddColumns("Task", "Entry Count", "Unlogged Time (hh:mm)", "Total Time (hh:mm)");
+        // if there are no entries then skip showing the summary section
+        if(_timeEntries.IsEmpty) return;
 
         var taskQuery = 
             from entry in _timeEntries.Values
-            where entry.IsComplete == true
+            where entry.IsComplete == true && !string.IsNullOrEmpty(entry.Task)
             group entry by entry.Task.ToLower() into taskGroup
             select new
             {
@@ -102,6 +90,15 @@ internal class Session
                 TotalMins = taskGroup.Sum(s => Math.Ceiling((s.EndTime - s.StartTime).TotalMinutes)),
                 UnloggedMins = taskGroup.Sum(s => Math.Ceiling(s.Logged ? 0 : (s.EndTime - s.StartTime).TotalMinutes))
             };
+
+        if(!taskQuery.Any()) return; // if there are no completed entries with tasks assigned, skip showing the summary section
+            
+        Table table = new Table()
+            .MarkdownBorder()
+            .BorderColor(Color.Blue)
+            .Title("[cyan bold]Summary[/]");
+
+        table.AddColumns("Task", "Entry Count", "Unlogged Time (hh:mm)", "Total Time (hh:mm)");
 
             TimeSpan totalTaskTimeForDay = TimeSpan.Zero;
 
