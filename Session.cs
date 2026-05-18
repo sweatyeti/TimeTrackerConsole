@@ -76,8 +76,10 @@ internal class Session
     // ref: https://github.com/sweatyeti/MyTimeTracker/blob/main/BlazorTimeKeeper/Components/Pages/Home.razor
     private void DisplaySummary()
     {
-        // if there are no entries or just one entry with no task assigned, skip showing the summary section
-        if(_timeEntries.IsEmpty || (_timeEntries.Count == 1 && _timeEntries.Single().Value.Task == string.Empty)) 
+        // if there are no entries or just one entry with no task assigned, or one in-progress entry then skip showing the summary section
+        if(_timeEntries.IsEmpty 
+        || (_timeEntries.Count == 1 
+             && (_timeEntries.Single().Value.Task == string.Empty || !_timeEntries.Single().Value.IsComplete)))
         {
             return;
         }
