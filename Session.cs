@@ -91,7 +91,7 @@ internal class Session
 
         var taskQuery = 
             from entry in _timeEntries.Values
-            where entry.IsComplete == true && !string.IsNullOrEmpty(entry.Task)
+            where entry.IsComplete == true
             group entry by entry.Task.ToLower() into taskGroup
             select new
             {
@@ -114,7 +114,7 @@ internal class Session
 
             foreach(var taskGroup in taskQuery)
             {
-                bool emptyTask = string.IsNullOrEmpty(taskGroup.Task);
+                bool emptyTask = string.IsNullOrEmpty(taskGroup.Task) || taskGroup.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
                 if(!emptyTask)
                 {
                     totalTaskTimeForDay += TimeSpan.FromMinutes(taskGroup.TotalMins);
@@ -217,7 +217,7 @@ internal class Session
         // if the choice is not one of the static options, then it must be an entry choice, so find the entry with the matching ID and return its details as the converter result
         if(_timeEntries.TryGetValue(choice, out TimeEntry? entry))
         {
-            result = $"[CadetBlue]Id: {entry.Id} | Task: {entry.Task} | {entry.StartTime:HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm:ss") : "[green bold]In Progress[/]")} {(entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{entry.Description}")}[/]";
+            result = $"[CadetBlue]Id: {entry.Id} | Task: {entry.Task} | {entry.StartTime:HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm:ss") : "[green bold]In Progress[/]")} {(entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase) ? string.Empty : entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{entry.Description}")}[/]";
         }
 
         return result;
@@ -275,7 +275,10 @@ internal class Session
             .AllowEmpty()
             .ShowDefaultValue(false);
         string entryTask = AnsiConsole.Prompt(entryTaskPrompt);
-        newEntry.Task = entryTask.Trim();
+        string trimmedEntryTask = entryTask.Trim();
+        if(String.IsNullOrEmpty(trimmedEntryTask)) trimmedEntryTask = "none";
+
+        newEntry.Task = trimmedEntryTask;
         IsActive = _timeEntries.TryAdd(newEntry.Id, newEntry);
     }
 
@@ -318,7 +321,7 @@ internal class Session
             }
         }
 
-        if(selectedEntry.IsComplete && !String.IsNullOrEmpty(selectedEntry.Task))
+        if(selectedEntry.IsComplete && !selectedEntry.Task.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
             TextPrompt<bool> isItLoggedPrompt = new TextPrompt<bool>($"Is this entry logged? (current: {(selectedEntry.Logged ? "yes" : "no")})")
             .AddChoice(true)
@@ -355,7 +358,7 @@ internal class Session
     {
         // get distinct task groups from entries
         IEnumerable<string> taskGroups = _timeEntries.Values
-            .Where(entry => !string.IsNullOrEmpty(entry.Task))
+            .Where(entry => !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase))
             .Select(entry => entry.Task)
             .Distinct();
 

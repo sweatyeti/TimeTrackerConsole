@@ -3,7 +3,7 @@ public class TimeEntry
     public int Id { get; private set;}
     public DateTime StartTime { get; set; }
     public DateTime EndTime { get; set; } = DateTime.MinValue;
-    public string Task { get; set; } = string.Empty;
+    public string Task { get; set; } = "none";
     public string Description { get; set; }  = string.Empty;
     public bool Logged { get; set; } = false;
     public bool IsComplete { get; set; }

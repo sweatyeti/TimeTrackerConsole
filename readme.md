@@ -1,7 +1,7 @@
 # todo
 
- - [ ] allow clearing of the task
- - [ ] in the list of entries highlight the in-progress one
+ - [x] allow clearing of the task (using a `none` string to do this)
+ - [x] in the list of entries highlight the in-progress one (used a bold green style for "In progress")
  - [x] when starting a new entry ask for the task up front
  - [x] if updating the in-progress entry don't prompt for logging
  - [x] don't ask to log entries that don't have tasks
