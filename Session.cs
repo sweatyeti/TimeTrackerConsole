@@ -44,7 +44,8 @@ internal class Session
             AnsiConsole.Clear();
             DisplayEntries();
             DisplaySummary();
-            PresentSessionMenu(); // right now this exits if needed, should perhaps return a bool to indicate whether to exit or not instead of having the exit logic in this method
+            //PresentSessionMenu(); // right now this exits if needed, should perhaps return a bool to indicate whether to exit or not instead of having the exit logic in this method
+            DisplayMainMenu();
         }
     }
 
@@ -114,6 +115,71 @@ internal class Session
             }
 
             AnsiConsole.Write(table);
+    }
+
+    private void DisplayMainMenu()
+    {
+        // this presents a menu where the top portion contains admin-type stuff like stopping/starting, logging a task group, exiting, etc.
+        // underneath that is the selectable list of entries
+
+        /* Layout could look like:
+         * [cyan bold]Session Name[/]
+         * 1. Stop current entry and start a new one
+         * 2. Log a task group
+         * 3. Stop tracking
+         * 4. Exit
+         * 5, 6, 7, etc. entries (use ID since the choice number is not shown anyways)
+        */
+
+        // need to determine how many choices will be presented to the user
+        int choiceCount = 4; // for the static options (stop/start, log task group, stop tracking, exit)
+        choiceCount += _timeEntries.Count; // add the number of entries to the choice count
+        // int[] entryChoices = Enumerable.Range(1, choiceCount).ToArray(); // create an array of ints for the entry choices
+
+        int[] entryChoices = new int[choiceCount];
+
+        entryChoices[0] = -1; // stop/start option
+        entryChoices[1] = -2; // log task group option
+        entryChoices[2] = -3; // stop tracking option
+        entryChoices[3] = -4; // exit option
+
+        int i = 4;
+        foreach(int entryId in _timeEntries.Keys)
+        {
+            entryChoices[i] = entryId; 
+            i++;
+        }
+
+        // would AddChoice be easier?
+        SelectionPrompt<int> theMenu = new SelectionPrompt<int>()
+            .Title(Name)
+            .AddChoices(entryChoices)
+            .UseConverter(MainMenuConverter);
+
+        int userChoice = AnsiConsole.Prompt(theMenu);
+
+    }
+
+    private string MainMenuConverter(int choice)
+    {
+
+        string result = choice switch
+        {
+            -1 => IsActive ? "Stop current entry and start a new one" : "Start a new entry",
+            -2 => "Log a task group",
+            -3 => "Stop tracking",
+            -4 => "Stop and exit",
+            _ => string.Empty
+        };
+        if(result != string.Empty) return result;
+
+        // if the choice is not one of the static options, then it must be an entry choice, so find the entry with the matching ID and return its details as the converter result
+        if(_timeEntries.TryGetValue(choice, out TimeEntry? entry))
+        {
+            result = $"Id: {entry.Id} {entry.Task} ({entry.StartTime:yyyy-MM-dd HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm:ss") : "In Progress")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})";
+        }
+
+        return result;
     }
 
     private void PresentSessionMenu()
