@@ -93,8 +93,6 @@ internal class Session
                 TotalMins = taskGroup.Sum(s => Math.Ceiling((s.EndTime - s.StartTime).TotalMinutes)),
                 UnloggedMins = taskGroup.Sum(s => Math.Ceiling(s.Logged ? 0 : (s.EndTime - s.StartTime).TotalMinutes))
             };
-
-        if(!taskQuery.Any()) return; // if there are no completed entries with tasks assigned, skip showing the summary section
             
         Table table = new Table()
             .MarkdownBorder()
@@ -103,20 +101,20 @@ internal class Session
 
         table.AddColumns("Task", "Count", "Unlogged (hh:mm)", "Total (hh:mm)");
 
-            TimeSpan totalTaskTimeForDay = TimeSpan.Zero;
+        TimeSpan totalTaskTimeForDay = TimeSpan.Zero;
 
-            foreach(var taskGroup in taskQuery)
+        foreach(var taskGroup in taskQuery)
+        {
+            bool emptyTask = string.IsNullOrEmpty(taskGroup.Task) || taskGroup.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
+            if(!emptyTask)
             {
-                bool emptyTask = string.IsNullOrEmpty(taskGroup.Task) || taskGroup.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
-                if(!emptyTask)
-                {
-                    totalTaskTimeForDay += TimeSpan.FromMinutes(taskGroup.TotalMins);
-                }
-
-                table.AddRow(taskGroup.Task, taskGroup.EntryCount.ToString(), $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
+                totalTaskTimeForDay += TimeSpan.FromMinutes(taskGroup.TotalMins);
             }
 
-            AnsiConsole.Write(table);
+            table.AddRow(taskGroup.Task, taskGroup.EntryCount.ToString(), $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
+        }
+
+        AnsiConsole.Write(table);
     }
 
     private void DisplayMainMenu()
@@ -129,7 +127,7 @@ internal class Session
          *  Log a task group
          *  Stop tracking
          *  Exit
-         * [list of selectable entries with details]
+         *  [list of selectable entries with details]
         */
 
         // need to determine how many choices will be presented to the user
