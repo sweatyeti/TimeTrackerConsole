@@ -159,9 +159,9 @@ internal class Session
             i++;
         }
 
-        // would AddChoice be easier?
         SelectionPrompt<int> theMenu = new SelectionPrompt<int>()
             .AddChoices(entryChoices)
+            .WrapAround()
             .UseConverter(MainMenuConverter);
 
         AnsiConsole.MarkupLine("[orange1 bold]Select an [green]option[/] or [CadetBlue]entry[/] to update:[/]");
