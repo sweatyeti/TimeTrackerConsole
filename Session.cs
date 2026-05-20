@@ -6,14 +6,16 @@ internal class Session
     private Session() { }
 
     private readonly ConcurrentDictionary<int, TimeEntry> _timeEntries = new();
+    private static bool _usingNewMenu = true;
 
     public string Name { get; set; } = string.Empty;
     public bool IsActive {get; private set;} = false;
     public int EntryCount => _timeEntries.Count;
 
-    public static Session StartNew(string? name)
+    public static Session StartNew(string? name, bool useOldMenu)
     {
         Session session = new();
+        _usingNewMenu = !useOldMenu;
 
         if(String.IsNullOrEmpty(name))
         {
@@ -42,10 +44,17 @@ internal class Session
         while(true)
         {
             AnsiConsole.Clear();
-            DisplayEntries();
-            DisplaySummary();
-            //PresentSessionMenu(); // right now this exits if needed, should perhaps return a bool to indicate whether to exit or not instead of having the exit logic in this method
-            DisplayMainMenu();
+            if(_usingNewMenu)
+             {
+                DisplaySummary();
+                DisplayMainMenu();
+             }
+             else
+             {
+                DisplayEntries();
+                DisplaySummary();
+                PresentSessionMenu();
+             }
         }
     }
 
@@ -99,7 +108,7 @@ internal class Session
             .BorderColor(Color.Blue)
             .Title("[cyan bold]Summary[/]");
 
-        table.AddColumns("Task", "Entry Count", "Unlogged Time (hh:mm)", "Total Time (hh:mm)");
+        table.AddColumns("Task", "Count", "Unlogged (hh:mm)", "Total (hh:mm)");
 
             TimeSpan totalTaskTimeForDay = TimeSpan.Zero;
 
@@ -152,23 +161,55 @@ internal class Session
 
         // would AddChoice be easier?
         SelectionPrompt<int> theMenu = new SelectionPrompt<int>()
-            .Title(Name)
             .AddChoices(entryChoices)
             .UseConverter(MainMenuConverter);
 
+        AnsiConsole.MarkupLine("[orange1 bold]Select an [green]option[/] or [CadetBlue]entry[/] to update:[/]");
+
         int userChoice = AnsiConsole.Prompt(theMenu);
+
+        switch(userChoice)
+        {
+            case -1:
+                StopCurrentEntry();
+                StartNewEntry();
+                break;
+            case -2:
+                LogTaskGroupFlow();
+                break;
+            case -3:
+                StopSession(exit: false);
+                break;
+            case -4:
+                StopSession(exit: true);
+                break;
+            default:
+                if(_timeEntries.ContainsKey(userChoice))
+                {
+                    UpdateEntryFlow(userChoice);
+                }
+                else
+                {
+                    // should not reach here, but putting catch-all just in case
+                    AnsiConsole.MarkupLine("[red bold]Invalid choice. Press any key to continue...[/]");
+                    AnsiConsole.Console.Input.ReadKey(true);
+                }
+                break;
+        }
+        
 
     }
 
     private string MainMenuConverter(int choice)
     {
+        // this gets passed the int value for each choice in the menu during rendering, so generate the appropriate display string for each
 
         string result = choice switch
         {
-            -1 => IsActive ? "Stop current entry and start a new one" : "Start a new entry",
-            -2 => "Log a task group",
-            -3 => "Stop tracking",
-            -4 => "Stop and exit",
+            -1 => IsActive ? "[green]Stop current entry and start a new one[/]" : "[green]Start a new entry[/]",
+            -2 => "[green]Log a task group[/]",
+            -3 => "[green]Stop tracking[/]",
+            -4 => "[green]Stop and exit[/]",
             _ => string.Empty
         };
         if(result != string.Empty) return result;
@@ -176,7 +217,7 @@ internal class Session
         // if the choice is not one of the static options, then it must be an entry choice, so find the entry with the matching ID and return its details as the converter result
         if(_timeEntries.TryGetValue(choice, out TimeEntry? entry))
         {
-            result = $"Id: {entry.Id} {entry.Task} ({entry.StartTime:yyyy-MM-dd HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm:ss") : "In Progress")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})";
+            result = $"[CadetBlue]Id: {entry.Id} | Task: {entry.Task} | {entry.StartTime:HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm:ss") : "[green bold]In Progress[/]")} {(entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{entry.Description}")}[/]";
         }
 
         return result;
@@ -194,7 +235,7 @@ internal class Session
                 3 => "Log a task group",
                 4 => "Delete an entry",
                 5 => "Stop current session",
-                6 => "Exit",
+                6 => "Stop and exit",
                 _ => throw new InvalidOperationException()
             });
 
@@ -250,20 +291,32 @@ internal class Session
         IsActive = false;
     }
 
-    private void UpdateEntryFlow()
+    private void UpdateEntryFlow(int entryId = 0)
     {
-        if(_timeEntries.Count == 0)
+        TimeEntry? selectedEntry;
+        if(entryId == 0 && !_usingNewMenu)
         {
-            AnsiConsole.MarkupLine("[red bold]No entries to update.[/]");
-            return;
+            if(_timeEntries.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[red bold]No entries to update.[/]");
+                return;
+            }
+
+            SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
+                .Title("Select an entry to update:")
+                .AddChoices(_timeEntries.Values)
+                .UseConverter(entry => $"Id: {entry.Id} {entry.Task} ({entry.StartTime:HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm:ss") : "In Progress")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})");
+
+            selectedEntry = AnsiConsole.Prompt(entryPrompt);
         }
-
-        SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
-            .Title("Select an entry to update:")
-            .AddChoices(_timeEntries.Values)
-            .UseConverter(entry => $"Id: {entry.Id} {entry.Task} ({entry.StartTime:yyyy-MM-dd HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm:ss") : "In Progress")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})");
-
-        TimeEntry selectedEntry = AnsiConsole.Prompt(entryPrompt);
+        else
+        {
+            if(!_timeEntries.TryGetValue(entryId, out selectedEntry))
+            {
+                AnsiConsole.MarkupLine("[red bold]Selected entry not found.[/]");
+                return;
+            }
+        }
 
         if(selectedEntry.IsComplete && !String.IsNullOrEmpty(selectedEntry.Task))
         {
