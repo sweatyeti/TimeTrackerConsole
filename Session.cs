@@ -34,13 +34,6 @@ internal class Session
 
     public void MainLoop()
     {
-        // the loop flow is:
-        // start 
-        // -> clear display
-        // -> show entries and summary 
-        // -> read user input to determine next action (stop and start new, update current task or description, or stop and/or exit) 
-        // -> repeat       
-
         while(true)
         {
             AnsiConsole.Clear();
@@ -131,22 +124,21 @@ internal class Session
         // this presents a menu where the top portion contains admin-type stuff like stopping/starting, logging a task group, exiting, etc.
         // underneath that is the selectable list of entries
 
-        /* Layout could look like:
-         * [cyan bold]Session Name[/]
-         * 1. Stop current entry and start a new one
-         * 2. Log a task group
-         * 3. Stop tracking
-         * 4. Exit
-         * 5, 6, 7, etc. entries (use ID since the choice number is not shown anyways)
+        /* Layout looks like:
+         *  Stop current entry and start a new one
+         *  Log a task group
+         *  Stop tracking
+         *  Exit
+         * [list of selectable entries with details]
         */
 
         // need to determine how many choices will be presented to the user
         int choiceCount = 4; // for the static options (stop/start, log task group, stop tracking, exit)
         choiceCount += _timeEntries.Count; // add the number of entries to the choice count
-        // int[] entryChoices = Enumerable.Range(1, choiceCount).ToArray(); // create an array of ints for the entry choices
 
         int[] entryChoices = new int[choiceCount];
-
+        // using values <0 for admin options, and values >0 for entry options (corresponding to entry IDs)
+        // note: zero/0 as a value with not be used (so far) as entry IDs start at 1 and increment, and admin options are <0
         entryChoices[0] = -1; // stop/start option
         entryChoices[1] = -2; // log task group option
         entryChoices[2] = -3; // stop tracking option
@@ -159,6 +151,7 @@ internal class Session
             i++;
         }
 
+        // the prompt under-the-hood works with the int values in entryChoices, but the converter will display the appropriate string for each choice (either a static admin option or an entry's details depending on the value)
         SelectionPrompt<int> theMenu = new SelectionPrompt<int>()
             .AddChoices(entryChoices)
             .WrapAround()
@@ -168,6 +161,7 @@ internal class Session
 
         int userChoice = AnsiConsole.Prompt(theMenu);
 
+        // take the selected value and pass that into a switch to determine what to do
         switch(userChoice)
         {
             case -1:

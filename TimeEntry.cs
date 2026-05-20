@@ -9,7 +9,7 @@ public class TimeEntry
     public bool IsComplete { get; set; }
     public static int LatestAssignedID => _nextId-1;
 
-    private static int _nextId = 1;
+    private static int _nextId = 1; // this should always be 1
 
     private TimeEntry() { }
 
