@@ -58,7 +58,7 @@ internal class Session
             .BorderColor(Color.DarkOrange)
             .Title($"[cyan bold]{Name}[/]");
 
-        table.AddColumn("Id");
+        table.AddColumn("#");
         table.AddColumn("Start Time", col => col.Centered());
         table.AddColumn("End Time", col => col.Centered());
         table.AddColumn("Task", col => col.Centered());
@@ -152,10 +152,11 @@ internal class Session
         // the prompt under-the-hood works with the int values in entryChoices, but the converter will display the appropriate string for each choice (either a static admin option or an entry's details depending on the value)
         SelectionPrompt<int> theMenu = new SelectionPrompt<int>()
             .AddChoices(entryChoices)
+            .PageSize(20)
             .WrapAround()
             .UseConverter(MainMenuConverter);
 
-        AnsiConsole.MarkupLine("[orange1 bold]Select an [green]option[/] or [CadetBlue]entry[/] to update:[/]");
+        AnsiConsole.MarkupLine("[orange1 bold]Select an [Chartreuse2]option[/] or [CadetBlue]entry[/] to update:[/]");
 
         int userChoice = AnsiConsole.Prompt(theMenu);
 
@@ -198,10 +199,10 @@ internal class Session
 
         string result = choice switch
         {
-            -1 => IsActive ? "[green]Stop current entry and start a new one[/]" : "[green]Start a new entry[/]",
-            -2 => "[green]Log a task group[/]",
-            -3 => "[green]Stop tracking[/]",
-            -4 => "[green]Stop and exit[/]",
+            -1 => IsActive ? "[Chartreuse2]Stop current entry and start a new one[/]" : "[Chartreuse2]Start a new entry[/]",
+            -2 => "[Chartreuse2]Log a task group[/]",
+            -3 => "[Chartreuse2]Stop tracking[/]",
+            -4 => "[Chartreuse2]Stop and exit[/]",
             _ => string.Empty
         };
         if(result != string.Empty) return result;
@@ -209,7 +210,7 @@ internal class Session
         // if the choice is not one of the static options, then it must be an entry choice, so find the entry with the matching ID and return its details as the converter result
         if(_timeEntries.TryGetValue(choice, out TimeEntry? entry))
         {
-            result = $"[CadetBlue]Id: {entry.Id} | Task: {entry.Task} | {entry.StartTime:HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm:ss") : "[green bold]In Progress[/]")} {(entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase) ? string.Empty : entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{entry.Description}")}[/]";
+            result = $"[CadetBlue]#{entry.Id} | Task: {entry.Task} | {entry.StartTime:HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm:ss") : "[green bold]In Progress[/]")} {(entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase) ? string.Empty : entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{entry.Description}")}[/]";
         }
 
         return result;
@@ -411,6 +412,9 @@ internal class Session
 
         if (exit)
         {
+            AnsiConsole.Clear();
+            DisplayEntries();
+            DisplaySummary();
             Environment.Exit(0);
         }
     }
