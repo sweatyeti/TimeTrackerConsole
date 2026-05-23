@@ -7,7 +7,18 @@ public class TimeEntry
     public string Description { get; set; }  = string.Empty;
     public bool Logged { get; set; } = false;
     public bool IsComplete { get; set; }
+    public bool IsValid { get; set; } = true;
     public static int LatestAssignedID => _nextId-1;
+
+    public static TimeEntry GetEmpty()
+    {
+        TimeEntry entry = new()
+        {
+            Id = -100,
+            IsValid = false
+        };
+        return entry;
+    }
 
     private static int _nextId = 1; // this should always be 1
 

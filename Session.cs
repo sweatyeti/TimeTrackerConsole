@@ -158,7 +158,7 @@ internal class Session
 
         AnsiConsole.MarkupLine("[orange1 bold]Select an [Chartreuse2]option[/] or [CadetBlue]entry[/] to update:[/]");
 
-        int userChoice = AnsiConsole.Prompt(theMenu);
+        int userChoice = theMenu.Show(AnsiConsole.Console);
 
         // take the selected value and pass that into a switch to determine what to do
         switch(userChoice)
@@ -232,7 +232,7 @@ internal class Session
                 _ => throw new InvalidOperationException()
             });
 
-            int userChoice = AnsiConsole.Prompt(initialPrompt);
+            int userChoice = initialPrompt.Show(AnsiConsole.Console);
 
             switch (userChoice)
             {
@@ -303,7 +303,8 @@ internal class Session
                 .AddChoices(_timeEntries.Values)
                 .UseConverter(entry => $"Id: {entry.Id} {entry.Task} ({entry.StartTime:HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm:ss") : "In Progress")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})");
 
-            selectedEntry = AnsiConsole.Prompt(entryPrompt);
+            entryPrompt.CancelResult = () => TimeEntry.GetEmpty(); // this will return an empty (invalid) entry to check against
+            selectedEntry = entryPrompt.Show(AnsiConsole.Console);
         }
         else
         {
@@ -313,6 +314,9 @@ internal class Session
                 return;
             }
         }
+
+        // check if prompt was cancelled by checking if the returned TimeEntry is invalid
+        if(!selectedEntry.IsValid) return;
 
         if(selectedEntry.IsComplete && !selectedEntry.Task.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
@@ -327,7 +331,7 @@ internal class Session
                 false => "n"
             });
 
-            bool isItLogged = AnsiConsole.Prompt(isItLoggedPrompt);
+            bool isItLogged = isItLoggedPrompt.Show(AnsiConsole.Console);
             selectedEntry.Logged = isItLogged;
         }
 
@@ -335,7 +339,7 @@ internal class Session
             .AllowEmpty()
             .DefaultValue(selectedEntry.Task)
             .ShowDefaultValue(false);
-        string updatedEntryTask = AnsiConsole.Prompt(updatedEntryTaskPrompt);
+        string updatedEntryTask = updatedEntryTaskPrompt.Show(AnsiConsole.Console);
         selectedEntry.Task = updatedEntryTask.Trim();
 
         TextPrompt<string> updatedEntryDescriptionPrompt = new TextPrompt<string>($"Update entry's description (current: {selectedEntry.Description}):")
@@ -343,7 +347,7 @@ internal class Session
             .DefaultValue(selectedEntry.Description)
             .ShowDefaultValue(false);
 
-        string updatedEntryDescription = AnsiConsole.Prompt(updatedEntryDescriptionPrompt);
+        string updatedEntryDescription = updatedEntryDescriptionPrompt.Show(AnsiConsole.Console);
         selectedEntry.Description = updatedEntryDescription.Trim();
     }
 
@@ -363,12 +367,16 @@ internal class Session
         }
 
         SelectionPrompt<string> taskGroupPrompt = new SelectionPrompt<string>()
-            .Title("Select a task group to log:")
+            .Title("Select a task group to log (press ESC to cancel):")
             .AddChoices(taskGroups)
             .UseConverter(taskGroup => $"{taskGroup} ({_timeEntries.Values.Count(entry => entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase))} entries)");
 
-        string selectedTaskGroup = AnsiConsole.Prompt(taskGroupPrompt);
+        taskGroupPrompt.CancelResult = () => string.Empty;
 
+        string selectedTaskGroup = taskGroupPrompt.Show(AnsiConsole.Console);
+
+        if(string.IsNullOrEmpty(selectedTaskGroup)) return;
+        
         IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Values.Where(entry => entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
 
         foreach(TimeEntry entry in entriesInTaskGroup)
@@ -390,9 +398,12 @@ internal class Session
             .Title("Select an entry to delete:")
             .AddChoices(_timeEntries.Values)
             .UseConverter(entry => $"Id: {entry.Id} {entry.Task} ({entry.StartTime:yyyy-MM-dd HH:mm:ss} - {(entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm:ss") : "In Progress")})");
-        TimeEntry selectedEntry = AnsiConsole.Prompt(entryPrompt);
+        
+        entryPrompt.CancelResult = () => TimeEntry.GetEmpty();
+        
+        TimeEntry selectedEntry = entryPrompt.Show(AnsiConsole.Console);
 
-        if (!AnsiConsole.Confirm("Are you sure you want to delete this entry?", defaultValue: true))
+        if (!selectedEntry.IsValid || !AnsiConsole.Confirm("Are you sure you want to delete this entry?", defaultValue: true))
         {
             return;
         }
