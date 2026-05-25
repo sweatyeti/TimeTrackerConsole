@@ -1,11 +1,10 @@
 using Spectre.Console;
-using System.Collections.Concurrent;
 
 internal class Session
 {
     private Session() { }
 
-    private readonly ConcurrentDictionary<int, TimeEntry> _timeEntries = new();
+    private readonly Dictionary<int, TimeEntry> _timeEntries = new();
     private static bool _usingNewMenu = true;
 
     public string Name { get; set; } = string.Empty;
@@ -80,7 +79,7 @@ internal class Session
     private void DisplaySummary()
     {
         // if there are no entries then skip showing the summary section
-        if(_timeEntries.IsEmpty) return;
+        if(_timeEntries.Count == 0) return;
 
         var taskQuery = 
             from entry in _timeEntries.Values
@@ -272,7 +271,8 @@ internal class Session
         if(String.IsNullOrEmpty(trimmedEntryTask)) trimmedEntryTask = "none";
 
         newEntry.Task = trimmedEntryTask;
-        IsActive = _timeEntries.TryAdd(newEntry.Id, newEntry);
+        _timeEntries[newEntry.Id] = newEntry;
+        IsActive = true;
     }
 
     private void StopCurrentEntry()
@@ -413,7 +413,7 @@ internal class Session
         {
             IsActive = false;
         }
-        _ = _timeEntries.TryRemove(selectedEntry.Id, out _);
+        _timeEntries.Remove(selectedEntry.Id);
     }
 
     // IN PROGRESS
