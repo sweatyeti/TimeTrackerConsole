@@ -142,7 +142,7 @@ internal class Session
         entryChoices[3] = -4; // exit option
 
         int i = 4;
-        foreach(int entryId in _timeEntries.Keys)
+        foreach(int entryId in _timeEntries.Keys.Reverse())
         {
             entryChoices[i] = entryId; 
             i++;
