@@ -55,7 +55,7 @@ internal class Session
         Table table = new Table()
             .MinimalDoubleHeadBorder()
             .BorderColor(Color.DarkOrange)
-            .Title($"[cyan bold]{Name}[/]");
+            .Title($"[cyan bold]{Markup.Escape(Name)}[/]");
 
         table.AddColumn("#");
         table.AddColumn("Start Time", col => col.Centered());
@@ -369,7 +369,7 @@ internal class Session
         SelectionPrompt<string> taskGroupPrompt = new SelectionPrompt<string>()
             .Title("Select a task group to log (press ESC to cancel):")
             .AddChoices(taskGroups)
-            .UseConverter(taskGroup => $"{taskGroup} ({_timeEntries.Values.Count(entry => entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase))} entries)");
+            .UseConverter(taskGroup => $"{Markup.Escape(taskGroup)} ({_timeEntries.Values.Count(entry => entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase))} entries)");
 
         taskGroupPrompt.CancelResult = () => string.Empty;
 
