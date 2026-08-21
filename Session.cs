@@ -55,7 +55,7 @@ internal class Session
         Table table = new Table()
             .MinimalDoubleHeadBorder()
             .BorderColor(Color.DarkOrange)
-            .Title($"[cyan bold]{Name}[/]");
+            .Title($"[cyan bold]{Markup.Escape(Name)}[/]");
 
         table.AddColumn("#");
         table.AddColumn("Start Time", col => col.Centered());
@@ -69,7 +69,7 @@ internal class Session
             bool exists = _timeEntries.TryGetValue(i, out TimeEntry? entry);
             if(!exists || entry is null) continue;
             
-            table.AddRow(entry.Id.ToString(), entry.StartTime.ToString("yyyy-MM-dd HH:mm"), entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "In Progress", entry.Task, entry.Logged ? "yes" : "no", entry.Description);
+            table.AddRow(entry.Id.ToString(), entry.StartTime.ToString("yyyy-MM-dd HH:mm"), entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "In Progress", Markup.Escape(entry.Task), entry.Logged ? "yes" : "no", Markup.Escape(entry.Description));
         }
 
         AnsiConsole.Write(table);
@@ -110,7 +110,7 @@ internal class Session
                 totalTaskTimeForDay += TimeSpan.FromMinutes(taskGroup.TotalMins);
             }
 
-            table.AddRow(taskGroup.Task, taskGroup.EntryCount.ToString(), $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
+            table.AddRow(Markup.Escape(taskGroup.Task), taskGroup.EntryCount.ToString(), $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
         }
 
         AnsiConsole.Write(table);
@@ -209,7 +209,7 @@ internal class Session
         // if the choice is not one of the static options, then it must be an entry choice, so find the entry with the matching ID and return its details as the converter result
         if(_timeEntries.TryGetValue(choice, out TimeEntry? entry))
         {
-            result = $"[CadetBlue]#{entry.Id} | Task: {entry.Task} | {entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[green bold]In Progress[/]")} {(entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase) ? string.Empty : entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{entry.Description}")}[/]";
+            result = $"[CadetBlue]#{entry.Id} | Task: {Markup.Escape(entry.Task)} | {entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[green bold]In Progress[/]")} {(entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase) ? string.Empty : entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{Markup.Escape(entry.Description)}")}[/]";
         }
 
         return result;
@@ -301,7 +301,7 @@ internal class Session
             SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
                 .Title("Select an entry to update:")
                 .AddChoices(_timeEntries.Values)
-                .UseConverter(entry => $"Id: {entry.Id} {entry.Task} ({entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "In Progress")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})");
+                .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "In Progress")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})");
 
             entryPrompt.CancelResult = () => TimeEntry.GetEmpty(); // this will return an empty (invalid) entry to check against
             selectedEntry = entryPrompt.Show(AnsiConsole.Console);
@@ -369,7 +369,7 @@ internal class Session
         SelectionPrompt<string> taskGroupPrompt = new SelectionPrompt<string>()
             .Title("Select a task group to log (press ESC to cancel):")
             .AddChoices(taskGroups)
-            .UseConverter(taskGroup => $"{taskGroup} ({_timeEntries.Values.Count(entry => entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase))} entries)");
+            .UseConverter(taskGroup => $"{Markup.Escape(taskGroup)} ({_timeEntries.Values.Count(entry => entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase))} entries)");
 
         taskGroupPrompt.CancelResult = () => string.Empty;
 
@@ -397,7 +397,7 @@ internal class Session
         SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
             .Title("Select an entry to delete:")
             .AddChoices(_timeEntries.Values)
-            .UseConverter(entry => $"Id: {entry.Id} {entry.Task} ({entry.StartTime:yyyy-MM-dd HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "In Progress")})");
+            .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:yyyy-MM-dd HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "In Progress")})");
         
         entryPrompt.CancelResult = () => TimeEntry.GetEmpty();
         
