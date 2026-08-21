@@ -335,14 +335,14 @@ internal class Session
             selectedEntry.Logged = isItLogged;
         }
 
-        TextPrompt<string> updatedEntryTaskPrompt = new TextPrompt<string>($"Update entry's task (current: {selectedEntry.Task}):")
+        TextPrompt<string> updatedEntryTaskPrompt = new TextPrompt<string>($"Update entry's task (current: {Markup.Escape(selectedEntry.Task)}):")
             .AllowEmpty()
             .DefaultValue(selectedEntry.Task)
             .ShowDefaultValue(false);
         string updatedEntryTask = updatedEntryTaskPrompt.Show(AnsiConsole.Console);
         selectedEntry.Task = updatedEntryTask.Trim();
 
-        TextPrompt<string> updatedEntryDescriptionPrompt = new TextPrompt<string>($"Update entry's description (current: {selectedEntry.Description}):")
+        TextPrompt<string> updatedEntryDescriptionPrompt = new TextPrompt<string>($"Update entry's description (current: {Markup.Escape(selectedEntry.Description)}):")
             .AllowEmpty()
             .DefaultValue(selectedEntry.Description)
             .ShowDefaultValue(false);
