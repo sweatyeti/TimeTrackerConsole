@@ -69,7 +69,7 @@ internal class Session
             bool exists = _timeEntries.TryGetValue(i, out TimeEntry? entry);
             if(!exists || entry is null) continue;
             
-            table.AddRow(entry.Id.ToString(), entry.StartTime.ToString("yyyy-MM-dd HH:mm"), entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "In Progress", entry.Task, entry.Logged ? "yes" : "no", entry.Description);
+            table.AddRow(entry.Id.ToString(), entry.StartTime.ToString("yyyy-MM-dd HH:mm"), entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "In Progress", Markup.Escape(entry.Task), entry.Logged ? "yes" : "no", Markup.Escape(entry.Description));
         }
 
         AnsiConsole.Write(table);
@@ -110,7 +110,7 @@ internal class Session
                 totalTaskTimeForDay += TimeSpan.FromMinutes(taskGroup.TotalMins);
             }
 
-            table.AddRow(taskGroup.Task, taskGroup.EntryCount.ToString(), $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
+            table.AddRow(Markup.Escape(taskGroup.Task), taskGroup.EntryCount.ToString(), $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
         }
 
         AnsiConsole.Write(table);
