@@ -384,6 +384,10 @@ internal class Session
         // check if prompt was cancelled by checking if the returned TimeEntry is invalid
         if(!selectedEntry.IsValid) return;
 
+        // gather ALL prompt inputs first, then apply them in a single atomic
+        // mutation under the lock (was three separate lock blocks - the entry
+        // update can no longer be persisted half-applied by a mid-flow flush)
+        bool? updatedLogged = null;
         if(selectedEntry.IsComplete && !selectedEntry.Task.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
             TextPrompt<bool> isItLoggedPrompt = new TextPrompt<bool>($"Is this entry logged? (current: {(selectedEntry.Logged ? "yes" : "no")})")
@@ -397,11 +401,7 @@ internal class Session
                 false => "n"
             });
 
-            bool isItLogged = isItLoggedPrompt.Show(AnsiConsole.Console);
-            lock(_store.MutationLock)
-            {
-                selectedEntry.Logged = isItLogged;
-            }
+            updatedLogged = isItLoggedPrompt.Show(AnsiConsole.Console);
         }
 
         TextPrompt<string> updatedEntryTaskPrompt = new TextPrompt<string>($"Update entry's task (current: {Markup.Escape(selectedEntry.Task)}):")
@@ -409,10 +409,6 @@ internal class Session
             .DefaultValue(selectedEntry.Task)
             .ShowDefaultValue(false);
         string updatedEntryTask = updatedEntryTaskPrompt.Show(AnsiConsole.Console);
-        lock(_store.MutationLock)
-        {
-            selectedEntry.Task = updatedEntryTask.Trim();
-        }
 
         TextPrompt<string> updatedEntryDescriptionPrompt = new TextPrompt<string>($"Update entry's description (current: {Markup.Escape(selectedEntry.Description)}):")
             .AllowEmpty()
@@ -420,8 +416,11 @@ internal class Session
             .ShowDefaultValue(false);
 
         string updatedEntryDescription = updatedEntryDescriptionPrompt.Show(AnsiConsole.Console);
+
         lock(_store.MutationLock)
         {
+            if(updatedLogged.HasValue) selectedEntry.Logged = updatedLogged.Value;
+            selectedEntry.Task = updatedEntryTask.Trim();
             selectedEntry.Description = updatedEntryDescription.Trim();
         }
 
@@ -456,11 +455,13 @@ internal class Session
         
         IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Values.Where(entry => entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
 
-        foreach(TimeEntry entry in entriesInTaskGroup)
+        // single acquisition for the whole group: the lazy LINQ enumeration rides
+        // inside the lock, so the snapshot can never see a partially-logged group
+        lock(_store.MutationLock)
         {
-            if(!entry.IsComplete) continue; // skip in progress entries, only log completed entries
-            lock(_store.MutationLock)
+            foreach(TimeEntry entry in entriesInTaskGroup)
             {
+                if(!entry.IsComplete) continue; // skip in progress entries, only log completed entries
                 entry.Logged = true;
             }
         }
