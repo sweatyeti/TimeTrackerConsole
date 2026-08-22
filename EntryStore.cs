@@ -38,8 +38,10 @@ internal sealed class EntryStore
     private volatile bool _dirty;
 
     // shared with the Session's mutation sites: held only for the fast in-memory
-    // copy/assignment, never while doing disk I/O
-    public object MutationLock { get; } = new();
+    // copy/assignment, never while doing disk I/O. typed as System.Threading.Lock
+    // (not object) so the C# 13 lock keyword at the call sites compiles to
+    // EnterScope()/Dispose instead of Monitor.Enter/Exit
+    public Lock MutationLock { get; } = new();
 
     public EntryStore(Session session, string sessionName)
     {
