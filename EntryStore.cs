@@ -2,179 +2,252 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-internal class EntryStore
+// owns the on-disk side of the session: a background loop that wakes every 5 seconds,
+// checks the dirty flag, and - if anything changed - snapshots the live in-memory
+// state, serializes it, and writes it atomically (tmp file + rename) to
+// entries/<slug>.json (one file per session). the UI thread never touches the disk:
+// it only takes the mutation lock briefly when mutating entries and raises the dirty
+// flag via MarkDirty(). serialization happens on the background thread using a
+// copy-then-serialize guard: the entry data is copied to detached snapshot records
+// under the mutation lock, and only that (fast) copy holds the lock - never disk I/O.
+internal sealed class EntryStore
 {
-    private readonly object _mutationLock = new();
-    private volatile bool _dirty;
-    private Task? _timerTask;
-    private CancellationTokenSource? _cts;
+    public const int SchemaVersion = 1;
 
-    private readonly string _filePath;
-    private readonly string _sessionName;
-    private readonly Guid _sessionId;
-    private readonly DateTime _startedAt;
-    private readonly Func<SessionSnapshot> _snapshotFunc;
+    private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(5);
 
-    private static readonly char[] _invalidSlugChars = { '<', '>', ':', '"', '/', '\\', '|', '?', '*' };
-
-    private static readonly JsonSerializerOptions _jsonOptions = new()
+    // default System.Text.Json DateTime handling round-trips DateTime.Now (Kind.Local)
+    // as ISO 8601 with offset; camelCase property names match the file schema
+    private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    public object MutationLock => _mutationLock;
+    // path/device-hostile characters stripped from the filename slug (the current
+    // platform's invalid set plus the Windows set, so files stay portable)
+    private static readonly HashSet<char> HostileChars = BuildHostileChars();
 
-    public EntryStore(string sessionName, Guid sessionId, DateTime startedAt, Func<SessionSnapshot> snapshotFunc)
+    private readonly Session _session;
+    private readonly string _directoryPath;
+    private readonly string _filePath;
+    private readonly string _tmpPath;
+    private readonly CancellationTokenSource _cts = new();
+    private readonly SemaphoreSlim _flushGate = new(1, 1);
+    private Task? _flushLoopTask;
+    private volatile bool _dirty;
+
+    // shared with the Session's mutation sites: held only for the fast in-memory
+    // copy/assignment, never while doing disk I/O
+    public object MutationLock { get; } = new();
+
+    public EntryStore(Session session, string sessionName)
     {
-        _sessionName = sessionName;
-        _sessionId = sessionId;
-        _startedAt = startedAt;
-        _snapshotFunc = snapshotFunc;
+        _session = session;
 
-        string entriesDir = "entries";
-        Directory.CreateDirectory(entriesDir);
+        // files live in entries/ relative to the current working directory
+        _directoryPath = Path.Combine(Directory.GetCurrentDirectory(), "entries");
+        Directory.CreateDirectory(_directoryPath);
 
         string slug = Slugify(sessionName);
-        _filePath = ResolveCollision(entriesDir, slug);
+        _filePath = ResolveCollisionFreePath(slug);
+        _tmpPath = _filePath + ".tmp";
     }
 
-    public void Start()
-    {
-        _cts = new CancellationTokenSource();
-        _timerTask = Task.Run(() => TimerLoopAsync(_cts.Token));
-    }
-
+    // called by the Session at every mutation site - just raises the flag the
+    // background loop checks every 5 seconds
     public void MarkDirty()
     {
         _dirty = true;
     }
 
-    public Task FlushAsync()
+    // starts the background flush loop (first check is immediate, then every 5 seconds)
+    public void Start()
     {
-        // Stop the background timer
-        _cts?.Cancel();
-        if (_timerTask != null)
+        _flushLoopTask = Task.Run(RunFlushLoopAsync);
+    }
+
+    // final flush on graceful exit: stop the periodic loop (letting any in-flight
+    // flush finish), then force one last write of the current state
+    public async Task FlushAsync()
+    {
+        _cts.Cancel();
+
+        if(_flushLoopTask is not null)
         {
             try
             {
-                _timerTask.Wait(TimeSpan.FromSeconds(10));
+                await _flushLoopTask;
             }
-            catch
+            catch(OperationCanceledException)
             {
-                // timer already finished or timed out; proceed with final flush
+                // the loop observed the cancellation while waiting - expected
             }
         }
 
-        // Ensure a final write regardless of dirty state
         _dirty = true;
-        DoFlush();
-
-        return Task.CompletedTask;
+        await TryFlushAsync();
     }
 
-    private async Task TimerLoopAsync(CancellationToken ct)
+    private async Task RunFlushLoopAsync()
     {
-        while (!ct.IsCancellationRequested)
+        bool firstPass = true;
+        while(!_cts.IsCancellationRequested)
         {
-            try
+            if(!firstPass)
             {
-                await Task.Delay(5000, ct);
+                try
+                {
+                    await Task.Delay(FlushInterval, _cts.Token);
+                }
+                catch(OperationCanceledException)
+                {
+                    break;
+                }
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+            firstPass = false;
 
-            if (_dirty)
-            {
-                _dirty = false;
-                DoFlush();
-            }
+            if(!_dirty) continue;
+            await TryFlushAsync();
         }
     }
 
-    private void DoFlush()
+    private async Task TryFlushAsync()
     {
-        // Best-effort cleanup of orphaned .tmp from a prior crash
-        CleanupOrphanTmp();
+        if(!_dirty) return;
 
-        // Take a snapshot under the mutation lock (fast in-memory copy only)
-        SessionSnapshot snapshot;
-        lock (_mutationLock)
+        // if a previous flush is still writing (slow disk), skip this tick - the
+        // dirty flag is still set so the next tick picks the state up
+        if(!_flushGate.Wait(0)) return;
+
+        try
         {
-            snapshot = _snapshotFunc();
+            // copy-then-serialize: snapshot the live state under the mutation lock,
+            // then serialize/write without holding it. CLEAR the dirty flag BEFORE
+            // taking the snapshot: if a mutation lands between the clear and the
+            // snapshot it either makes it into this snapshot or re-dirties the flag
+            // for the next tick — a mutation after the snapshot is never lost.
+            _dirty = false;
+            SessionSnapshot snapshot = _session.TakeSnapshot();
+
+            CleanOrphanedTmpFiles();
+
+            string json = JsonSerializer.Serialize(snapshot, JsonOptions);
+            using(FileStream stream = new(_tmpPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            using(StreamWriter writer = new(stream, new UTF8Encoding(false)))
+            {
+                await writer.WriteAsync(json.AsMemory());
+                await writer.FlushAsync();
+            }
+
+            // atomic rename: a crash mid-write leaves a stale .tmp, never a corrupt final file
+            File.Move(_tmpPath, _filePath, overwrite: true);
         }
-
-        // Serialize (no lock held — we own the snapshot)
-        string json = JsonSerializer.Serialize(snapshot, _jsonOptions);
-
-        // Atomic write: write to .tmp, then rename over the final file
-        string tmpPath = _filePath + ".tmp";
-        File.WriteAllText(tmpPath, json);
-        File.Move(tmpPath, _filePath, overwrite: true);
+        catch(Exception)
+        {
+            // best effort: re-raise the flag so the next tick retries the write
+            _dirty = true;
+        }
+        finally
+        {
+            _flushGate.Release();
+        }
     }
 
-    private void CleanupOrphanTmp()
+    // a crashed run can leave .tmp files behind; best-effort cleanup on flush start
+    private void CleanOrphanedTmpFiles()
     {
         try
         {
-            string tmpPath = _filePath + ".tmp";
-            if (File.Exists(tmpPath))
+            foreach(string orphan in Directory.EnumerateFiles(_directoryPath, "*.tmp"))
             {
-                File.Delete(tmpPath);
+                try
+                {
+                    File.Delete(orphan);
+                }
+                catch(Exception)
+                {
+                    // best effort
+                }
             }
         }
-        catch
+        catch(Exception)
         {
-            // best effort — ignore failures
+            // best effort
         }
     }
 
+    // if the slug is already taken (two sessions with the same name), append -2, -3, ...
+    private string ResolveCollisionFreePath(string slug)
+    {
+        string candidate = Path.Combine(_directoryPath, slug + ".json");
+        int suffix = 2;
+        while(File.Exists(candidate))
+        {
+            candidate = Path.Combine(_directoryPath, slug + "-" + suffix + ".json");
+            suffix++;
+        }
+        return candidate;
+    }
+
+    // "Session 2026-08-21 23:58:12" -> "Session-2026-08-21-235812"
+    // spaces become dashes; ':' and any other path/device-hostile characters are stripped
     private static string Slugify(string name)
     {
-        name = name.Replace(" ", "-");
-        var sb = new StringBuilder(name.Length);
-        foreach (char c in name)
+        StringBuilder sb = new(name.Length);
+        foreach(char c in name)
         {
-            if (Array.IndexOf(_invalidSlugChars, c) == -1)
+            if(c == ' ')
+            {
+                sb.Append('-');
+            }
+            else if(!HostileChars.Contains(c))
             {
                 sb.Append(c);
             }
         }
-        return sb.ToString();
+
+        string slug = sb.ToString().Trim();
+        return string.IsNullOrEmpty(slug) ? "session" : slug;
     }
 
-    private static string ResolveCollision(string entriesDir, string slug)
+    private static HashSet<char> BuildHostileChars()
     {
-        string candidate = Path.Combine(entriesDir, $"{slug}.json");
-        int counter = 2;
-        while (File.Exists(candidate))
+        HashSet<char> chars = new(Path.GetInvalidFileNameChars());
+
+        // Windows-invalid characters, kept portable even when running on Linux
+        foreach(char c in new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' })
         {
-            candidate = Path.Combine(entriesDir, $"{slug}-{counter}.json");
-            counter++;
+            chars.Add(c);
         }
-        return candidate;
+
+        // control characters
+        for(int i = 0; i < 32; i++)
+        {
+            chars.Add((char)i);
+        }
+
+        return chars;
     }
 }
 
-internal class SessionSnapshot
-{
-    public int SchemaVersion { get; set; } = 1;
-    public string SessionId { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
-    public DateTime StartedAt { get; set; }
-    public DateTime? EndedAt { get; set; }
-    public List<EntrySnapshot> Entries { get; set; } = new();
-}
+// the shape of the file on disk - versioned, self-describing, and stable so the
+// future import feature can read these files back and identify the session from
+// the file contents rather than the filename
+internal sealed record SessionSnapshot(
+    int SchemaVersion,
+    Guid SessionId,
+    string Name,
+    DateTime StartedAt,
+    DateTime? EndedAt,
+    List<EntrySnapshot> Entries);
 
-internal class EntrySnapshot
-{
-    public int Id { get; set; }
-    public DateTime StartTime { get; set; }
-    public DateTime? EndTime { get; set; }
-    public string Task { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-    public bool Logged { get; set; }
-    public bool IsComplete { get; set; }
-}
+// IsValid is deliberately not part of the snapshot - it is a runtime sentinel only
+internal sealed record EntrySnapshot(
+    int Id,
+    DateTime StartTime,
+    DateTime? EndTime,
+    string Task,
+    string Description,
+    bool Logged,
+    bool IsComplete);

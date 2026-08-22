@@ -37,6 +37,8 @@ static void NewSession(string? name, bool useOldMenu = false)
     // call the main session loop that does all the work
     currentSession.MainLoop();
 
-    // perform final flush: stop the background timer and write the last state to disk
-    currentSession.FinalizeStore();
+    // the session ended gracefully (StopSession exit path) - stop the background
+    // flush loop and force one final write so the on-disk file is up to date,
+    // then let the process exit normally
+    currentSession.Shutdown();
 }
