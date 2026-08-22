@@ -6,10 +6,16 @@ internal class Session
 
     private readonly Dictionary<int, TimeEntry> _timeEntries = new();
     private static bool _usingNewMenu = true;
+    private bool _shouldExit;
 
     public string Name { get; set; } = string.Empty;
     public bool IsActive {get; private set;} = false;
     public int EntryCount => _timeEntries.Count;
+    public Guid SessionId { get; private set; }
+    public DateTime StartedAt { get; private set; }
+    public DateTime? EndedAt { get; private set; }
+
+    private EntryStore _store = null!;
 
     public static Session StartNew(string? name, bool useOldMenu)
     {
@@ -21,6 +27,12 @@ internal class Session
             name = $"Session {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
         }
         session.Name = name;
+        session.SessionId = Guid.NewGuid();
+        session.StartedAt = DateTime.Now;
+
+        // wire up the on-disk entry store
+        session._store = new EntryStore(name, session.SessionId, session.StartedAt, session.TakeSnapshot);
+        session._store.Start();
 
         // create and populate the first time entry
         session.StartNewEntry();
@@ -28,12 +40,11 @@ internal class Session
         return session;
     }
 
-// TODO: implement a save-to-file task that runs whenever a change is made to the session's entries
 // TODO: implement a load-from-file task that can be used to load a previous session and continue tracking time in it
 
     public void MainLoop()
     {
-        while(true)
+        while(!_shouldExit)
         {
             AnsiConsole.Clear();
             if(_usingNewMenu)
@@ -48,6 +59,36 @@ internal class Session
                 PresentSessionMenu();
              }
         }
+    }
+
+    public void FinalizeStore()
+    {
+        _store.FlushAsync().GetAwaiter().GetResult();
+    }
+
+    private SessionSnapshot TakeSnapshot()
+    {
+        return new SessionSnapshot
+        {
+            SchemaVersion = 1,
+            SessionId = SessionId.ToString(),
+            Name = Name,
+            StartedAt = StartedAt,
+            EndedAt = EndedAt,
+            Entries = _timeEntries.Values
+                .OrderByDescending(e => e.Id)
+                .Select(e => new EntrySnapshot
+                {
+                    Id = e.Id,
+                    StartTime = e.StartTime,
+                    EndTime = e.IsComplete ? e.EndTime : (DateTime?)null,
+                    Task = e.Task,
+                    Description = e.Description,
+                    Logged = e.Logged,
+                    IsComplete = e.IsComplete
+                })
+                .ToList()
+        };
     }
 
     private void DisplayEntries()
@@ -219,7 +260,7 @@ internal class Session
     {
         SelectionPrompt<int> initialPrompt = new SelectionPrompt<int>()
             .Title("Pick one:")
-            .AddChoices(new[] { 1, 2, 3, 4, 5, 6})
+            .AddChoices(new[] { 1, 2, 3, 4, 5, 6 })
             .UseConverter(choice => choice switch
             {
                 1 => IsActive ? "Stop current entry and start a new one" : "Start a new entry",
@@ -271,8 +312,12 @@ internal class Session
         if(String.IsNullOrEmpty(trimmedEntryTask)) trimmedEntryTask = "none";
 
         newEntry.Task = trimmedEntryTask;
-        _timeEntries[newEntry.Id] = newEntry;
+        lock (_store.MutationLock)
+        {
+            _timeEntries[newEntry.Id] = newEntry;
+        }
         IsActive = true;
+        _store.MarkDirty();
     }
 
     private void StopCurrentEntry()
@@ -282,9 +327,13 @@ internal class Session
         TimeEntry currentEntry = _timeEntries[TimeEntry.LatestAssignedID];
         if(currentEntry.IsComplete) return;
 
-        currentEntry.EndTime = DateTime.Now;
-        currentEntry.IsComplete = true;
+        lock (_store.MutationLock)
+        {
+            currentEntry.EndTime = DateTime.Now;
+            currentEntry.IsComplete = true;
+        }
         IsActive = false;
+        _store.MarkDirty();
     }
 
     private void UpdateEntryFlow(int entryId = 0)
@@ -318,6 +367,7 @@ internal class Session
         // check if prompt was cancelled by checking if the returned TimeEntry is invalid
         if(!selectedEntry.IsValid) return;
 
+        bool updatedLogged = false;
         if(selectedEntry.IsComplete && !selectedEntry.Task.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
             TextPrompt<bool> isItLoggedPrompt = new TextPrompt<bool>($"Is this entry logged? (current: {(selectedEntry.Logged ? "yes" : "no")})")
@@ -332,6 +382,7 @@ internal class Session
             });
 
             bool isItLogged = isItLoggedPrompt.Show(AnsiConsole.Console);
+            updatedLogged = true;
             selectedEntry.Logged = isItLogged;
         }
 
@@ -340,7 +391,6 @@ internal class Session
             .DefaultValue(selectedEntry.Task)
             .ShowDefaultValue(false);
         string updatedEntryTask = updatedEntryTaskPrompt.Show(AnsiConsole.Console);
-        selectedEntry.Task = updatedEntryTask.Trim();
 
         TextPrompt<string> updatedEntryDescriptionPrompt = new TextPrompt<string>($"Update entry's description (current: {Markup.Escape(selectedEntry.Description)}):")
             .AllowEmpty()
@@ -348,7 +398,18 @@ internal class Session
             .ShowDefaultValue(false);
 
         string updatedEntryDescription = updatedEntryDescriptionPrompt.Show(AnsiConsole.Console);
-        selectedEntry.Description = updatedEntryDescription.Trim();
+
+        lock (_store.MutationLock)
+        {
+            if(updatedLogged)
+            {
+                // Logged was already set above; re-assert under lock for consistency
+                // (the value is the same, but ensures the mutation is lock-protected)
+            }
+            selectedEntry.Task = updatedEntryTask.Trim();
+            selectedEntry.Description = updatedEntryDescription.Trim();
+        }
+        _store.MarkDirty();
     }
 
     private void LogTaskGroupFlow()
@@ -377,13 +438,17 @@ internal class Session
 
         if(string.IsNullOrEmpty(selectedTaskGroup)) return;
         
-        IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Values.Where(entry => entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
-
-        foreach(TimeEntry entry in entriesInTaskGroup)
+        lock (_store.MutationLock)
         {
-            if(!entry.IsComplete) continue; // skip in progress entries, only log completed entries
-            entry.Logged = true;
+            IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Values.Where(entry => entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
+
+            foreach(TimeEntry entry in entriesInTaskGroup)
+            {
+                if(!entry.IsComplete) continue; // skip in progress entries, only log completed entries
+                entry.Logged = true;
+            }
         }
+        _store.MarkDirty();
     }
 
     private void DeleteEntryFlow()
@@ -408,25 +473,34 @@ internal class Session
             return;
         }
 
-        // if the entry being deleted is currently active, flip the session's active switch to false before deleting the entry
-        if(selectedEntry == _timeEntries[TimeEntry.LatestAssignedID] && IsActive && !selectedEntry.IsComplete)
+        lock (_store.MutationLock)
         {
-            IsActive = false;
+            // if the entry being deleted is currently active, flip the session's active switch to false before deleting the entry
+            if(selectedEntry == _timeEntries[TimeEntry.LatestAssignedID] && IsActive && !selectedEntry.IsComplete)
+            {
+                IsActive = false;
+            }
+            _timeEntries.Remove(selectedEntry.Id);
         }
-        _timeEntries.Remove(selectedEntry.Id);
+        _store.MarkDirty();
     }
 
-    // IN PROGRESS
     private void StopSession(bool exit = false)
     {
         StopCurrentEntry();
 
         if (exit)
         {
+            lock (_store.MutationLock)
+            {
+                EndedAt = DateTime.Now;
+            }
+            _store.MarkDirty();
+
             AnsiConsole.Clear();
             DisplayEntries();
             DisplaySummary();
-            Environment.Exit(0);
+            _shouldExit = true;
         }
     }
 }

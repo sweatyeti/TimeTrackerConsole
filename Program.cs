@@ -1,4 +1,4 @@
-﻿using System.CommandLine;
+using System.CommandLine;
 
 RootCommand rootCommand = new("A simple console application for tracking time.");
 
@@ -37,5 +37,6 @@ static void NewSession(string? name, bool useOldMenu = false)
     // call the main session loop that does all the work
     currentSession.MainLoop();
 
+    // perform final flush: stop the background timer and write the last state to disk
+    currentSession.FinalizeStore();
 }
-
