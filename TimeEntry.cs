@@ -7,6 +7,7 @@ public class TimeEntry
     public string Description { get; set; }  = string.Empty;
     public bool Logged { get; set; } = false;
     public bool IsComplete { get; set; }
+    public bool IsDeleted { get; set; } = false;
     public bool IsValid { get; set; } = true;
     public static int LatestAssignedID => _nextId-1;
 
