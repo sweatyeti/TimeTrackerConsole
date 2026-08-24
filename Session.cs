@@ -7,9 +7,23 @@ internal class Session
     private readonly Dictionary<int, TimeEntry> _timeEntries = new();
     private static bool _usingNewMenu = true;
 
+    // owns the background flush loop, the dirty flag, and the mutation lock;
+    // initialized in StartNew before any mutation can happen
+    private EntryStore _store = null!;
+
+    // set by the StopSession(exit: true) path so MainLoop unwinds gracefully
+    // (instead of Environment.Exit) and Program.Main can run the final flush
+    private bool _shouldExit;
+
     public string Name { get; set; } = string.Empty;
     public bool IsActive {get; private set;} = false;
     public int EntryCount => _timeEntries.Count;
+
+    // persisted in the session file so a future import can identify the session
+    // from the file contents rather than the filename
+    public Guid SessionId { get; private set; }
+    public DateTime StartedAt { get; private set; }
+    public DateTime? EndedAt { get; private set; }
 
     public static Session StartNew(string? name, bool useOldMenu)
     {
@@ -21,19 +35,26 @@ internal class Session
             name = $"Session {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
         }
         session.Name = name;
+        session.SessionId = Guid.NewGuid();
+        session.StartedAt = DateTime.Now;
+
+        // wire up the on-disk store (creates entries/ and resolves the collision-free file path)
+        session._store = new EntryStore(session, name);
 
         // create and populate the first time entry
         session.StartNewEntry();
 
+        // start the background flush loop (immediate first check, then every 5 seconds)
+        session._store.Start();
+
         return session;
     }
 
-// TODO: implement a save-to-file task that runs whenever a change is made to the session's entries
-// TODO: implement a load-from-file task that can be used to load a previous session and continue tracking time in it
+    // TODO: implement a load-from-file task that can be used to load a previous session and continue tracking time in it
 
     public void MainLoop()
     {
-        while(true)
+        while(!_shouldExit)
         {
             AnsiConsole.Clear();
             if(_usingNewMenu)
@@ -47,6 +68,43 @@ internal class Session
                 DisplaySummary();
                 PresentSessionMenu();
              }
+        }
+    }
+
+    // graceful shutdown: stop the background flush loop and force one final write so
+    // the on-disk file reflects the last <=5 seconds of changes before the process exits
+    public void Shutdown()
+    {
+        _store.FlushAsync().GetAwaiter().GetResult();
+    }
+
+    // builds a detached copy of the live state under the mutation lock so the
+    // background thread can serialize it without tearing (copy-then-serialize)
+    internal SessionSnapshot TakeSnapshot()
+    {
+        lock(_store.MutationLock)
+        {
+            List<EntrySnapshot> entries = new();
+            foreach(int id in _timeEntries.Keys.OrderBy(id => id))
+            {
+                TimeEntry entry = _timeEntries[id];
+                entries.Add(new EntrySnapshot(
+                    entry.Id,
+                    entry.StartTime,
+                    entry.IsComplete ? entry.EndTime : null,
+                    entry.Task,
+                    entry.Description,
+                    entry.Logged,
+                    entry.IsComplete));
+            }
+
+            return new SessionSnapshot(
+                EntryStore.SchemaVersion,
+                SessionId,
+                Name,
+                StartedAt,
+                EndedAt,
+                entries);
         }
     }
 
@@ -219,7 +277,7 @@ internal class Session
     {
         SelectionPrompt<int> initialPrompt = new SelectionPrompt<int>()
             .Title("Pick one:")
-            .AddChoices(new[] { 1, 2, 3, 4, 5, 6})
+            .AddChoices(new[] { 1, 2, 3, 4, 5, 6 })
             .UseConverter(choice => choice switch
             {
                 1 => IsActive ? "Stop current entry and start a new one" : "Start a new entry",
@@ -271,8 +329,12 @@ internal class Session
         if(String.IsNullOrEmpty(trimmedEntryTask)) trimmedEntryTask = "none";
 
         newEntry.Task = trimmedEntryTask;
-        _timeEntries[newEntry.Id] = newEntry;
+        lock(_store.MutationLock)
+        {
+            _timeEntries[newEntry.Id] = newEntry;
+        }
         IsActive = true;
+        _store.MarkDirty();
     }
 
     private void StopCurrentEntry()
@@ -282,9 +344,13 @@ internal class Session
         TimeEntry currentEntry = _timeEntries[TimeEntry.LatestAssignedID];
         if(currentEntry.IsComplete) return;
 
-        currentEntry.EndTime = DateTime.Now;
-        currentEntry.IsComplete = true;
+        lock(_store.MutationLock)
+        {
+            currentEntry.EndTime = DateTime.Now;
+            currentEntry.IsComplete = true;
+        }
         IsActive = false;
+        _store.MarkDirty();
     }
 
     private void UpdateEntryFlow(int entryId = 0)
@@ -318,6 +384,10 @@ internal class Session
         // check if prompt was cancelled by checking if the returned TimeEntry is invalid
         if(!selectedEntry.IsValid) return;
 
+        // gather ALL prompt inputs first, then apply them in a single atomic
+        // mutation under the lock (was three separate lock blocks - the entry
+        // update can no longer be persisted half-applied by a mid-flow flush)
+        bool? updatedLogged = null;
         if(selectedEntry.IsComplete && !selectedEntry.Task.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
             TextPrompt<bool> isItLoggedPrompt = new TextPrompt<bool>($"Is this entry logged? (current: {(selectedEntry.Logged ? "yes" : "no")})")
@@ -331,8 +401,7 @@ internal class Session
                 false => "n"
             });
 
-            bool isItLogged = isItLoggedPrompt.Show(AnsiConsole.Console);
-            selectedEntry.Logged = isItLogged;
+            updatedLogged = isItLoggedPrompt.Show(AnsiConsole.Console);
         }
 
         TextPrompt<string> updatedEntryTaskPrompt = new TextPrompt<string>($"Update entry's task (current: {Markup.Escape(selectedEntry.Task)}):")
@@ -340,7 +409,6 @@ internal class Session
             .DefaultValue(selectedEntry.Task)
             .ShowDefaultValue(false);
         string updatedEntryTask = updatedEntryTaskPrompt.Show(AnsiConsole.Console);
-        selectedEntry.Task = updatedEntryTask.Trim();
 
         TextPrompt<string> updatedEntryDescriptionPrompt = new TextPrompt<string>($"Update entry's description (current: {Markup.Escape(selectedEntry.Description)}):")
             .AllowEmpty()
@@ -348,7 +416,15 @@ internal class Session
             .ShowDefaultValue(false);
 
         string updatedEntryDescription = updatedEntryDescriptionPrompt.Show(AnsiConsole.Console);
-        selectedEntry.Description = updatedEntryDescription.Trim();
+
+        lock(_store.MutationLock)
+        {
+            if(updatedLogged.HasValue) selectedEntry.Logged = updatedLogged.Value;
+            selectedEntry.Task = updatedEntryTask.Trim();
+            selectedEntry.Description = updatedEntryDescription.Trim();
+        }
+
+        _store.MarkDirty();
     }
 
     private void LogTaskGroupFlow()
@@ -379,11 +455,17 @@ internal class Session
         
         IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Values.Where(entry => entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
 
-        foreach(TimeEntry entry in entriesInTaskGroup)
+        // single acquisition for the whole group: the lazy LINQ enumeration rides
+        // inside the lock, so the snapshot can never see a partially-logged group
+        lock(_store.MutationLock)
         {
-            if(!entry.IsComplete) continue; // skip in progress entries, only log completed entries
-            entry.Logged = true;
+            foreach(TimeEntry entry in entriesInTaskGroup)
+            {
+                if(!entry.IsComplete) continue; // skip in progress entries, only log completed entries
+                entry.Logged = true;
+            }
         }
+        _store.MarkDirty();
     }
 
     private void DeleteEntryFlow()
@@ -413,7 +495,11 @@ internal class Session
         {
             IsActive = false;
         }
-        _timeEntries.Remove(selectedEntry.Id);
+        lock(_store.MutationLock)
+        {
+            _timeEntries.Remove(selectedEntry.Id);
+        }
+        _store.MarkDirty();
     }
 
     // IN PROGRESS
@@ -423,10 +509,20 @@ internal class Session
 
         if (exit)
         {
+            // mark the session as ended, flag the state as dirty, then let MainLoop
+            // unwind so Program.Main can perform the final on-disk flush before the
+            // process exits normally
+            lock(_store.MutationLock)
+            {
+                EndedAt = DateTime.Now;
+            }
+            _store.MarkDirty();
+
             AnsiConsole.Clear();
             DisplayEntries();
             DisplaySummary();
-            Environment.Exit(0);
+            _shouldExit = true;
+            // Environment.Exit(0); // replaced by the graceful unwind above so the final flush can run
         }
     }
 }

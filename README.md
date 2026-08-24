@@ -31,15 +31,47 @@ dotnet run -- new
 - Delete entry (with confirmation)
 - Stop tracking / Stop and exit
 
+## Persistence
+
+Sessions are written to `entries/` as JSON — one file per session — by a background flush:
+
+- **File name:** slug of the session name (spaces → `-`, Windows-invalid characters stripped); collisions get a `-2`, `-3` suffix
+- **Write cadence:** dirty-flag + background timer flushes every 5 seconds; a final flush runs on graceful exit
+- **Atomic writes:** each flush writes `<file>.tmp` then renames over the final file, so a crash never leaves a half-written session file
+- **Schema:** self-describing envelope — `schemaVersion`, `sessionId`, `name`, `startedAt`, `endedAt`, `entries[]` — robust to renames and future imports
+
+### Example `entries/<session>.json`
+
+```json
+{
+  "schemaVersion": 1,
+  "sessionId": "084120d5-51ab-4a6b-87e8-5a115adb0573",
+  "name": "Smoke [Test]",
+  "startedAt": "2026-08-22T01:22:46.4250603+00:00",
+  "endedAt": null,
+  "entries": [
+    {
+      "id": 1,
+      "startTime": "2026-08-22T01:22:46.4339468+00:00",
+      "endTime": null,
+      "task": "task-one",
+      "description": "",
+      "logged": false,
+      "isComplete": false
+    }
+  ]
+}
+```
+
 ## Project Structure
 
 ```
-Program.cs       — CLI entry point (System.CommandLine)
+Program.cs       — CLI entry point (System.CommandLine); final store flush on exit
 Session.cs       — Main loop, menus, entry CRUD, summary (Spectre.Console)
+EntryStore.cs    — On-disk store: 5s periodic flush, dirty flag, atomic writes
 TimeEntry.cs     — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete)
 ```
 
-
 ## Design Note
 
-Single-threaded, in-memory session. No persistence yet. MIT license.
+Single-threaded, in-memory session UI; sessions are persisted to `entries/` by a background flush (see Persistence). A hard crash loses at most ~5 seconds of changes; graceful exit flushes everything. MIT license.
