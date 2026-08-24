@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.id }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            rid: linux-x64
+            ext: ''
+            mode: selfcontained
+          - id: linux-arm64
+            rid: linux-arm64
+            ext: ''
+            mode: selfcontained
+          - id: win-x64
+            rid: win-x64
+            ext: .exe
+            mode: selfcontained
+          - id: osx-x64
+            rid: osx-x64
+            ext: ''
+            mode: selfcontained
+          - id: osx-arm64
+            rid: osx-arm64
+            ext: ''
+            mode: selfcontained
+          - id: portable
+            rid: ''
+            ext: ''
+            mode: portable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "${{ matrix.mode }}" == "selfcontained" ]]; then
+            dotnet publish -c Release -r "${{ matrix.rid }}" --self-contained true \
+              -p:PublishSingleFile=true -p:Version="$VERSION" -o ./publish
+            mv "./publish/TimeTrackerConsole${{ matrix.ext }}" \
+               "./TimeTrackerConsole-${{ matrix.id }}-$VERSION${{ matrix.ext }}"
+          else
+            # Portable = framework-dependent, no RID. Run anywhere a .NET 10
+            # runtime is installed via: dotnet TimeTrackerConsole.dll
+            dotnet publish -c Release --self-contained false \
+              -p:PublishSingleFile=false -p:Version="$VERSION" -o ./publish
+            cp ./publish/TimeTrackerConsole.dll \
+               ./publish/TimeTrackerConsole.deps.json \
+               ./publish/TimeTrackerConsole.runtimeconfig.json .
+            zip -j "TimeTrackerConsole-portable-$VERSION.zip" \
+                TimeTrackerConsole.dll TimeTrackerConsole.deps.json TimeTrackerConsole.runtimeconfig.json
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.id }}
+          path: TimeTrackerConsole-*
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ./assets
+          merge-multiple: true
+
+      - name: List release assets
+        shell: bash
+        run: ls -la ./assets
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ./assets/*
+          generate_release_notes: true
