@@ -23,16 +23,24 @@ Option<bool> useOldMenuOption = new("--old-menu")
 };
 newSubCommand.Options.Add(useOldMenuOption);
 
+Option<int> pageSizeOption = new("--page-size")
+{
+    Description = "Number of menu items (admin options + entries) shown in the main menu before paging. Default: 30."
+};
+pageSizeOption.DefaultValueFactory = _ => 30;
+newSubCommand.Options.Add(pageSizeOption);
+
 newSubCommand.SetAction(parseResult => NewSession(
     parseResult.GetValue(nameOption),
-    parseResult.GetValue(useOldMenuOption)
+    parseResult.GetValue(useOldMenuOption),
+    parseResult.GetValue(pageSizeOption)
 ));
 
 return rootCommand.Parse(args).Invoke();
 
-static void NewSession(string? name, bool useOldMenu = false)
+static void NewSession(string? name, bool useOldMenu = false, int pageSize = 30)
 {
-    Session currentSession = Session.StartNew(name, useOldMenu);
+    Session currentSession = Session.StartNew(name, useOldMenu, pageSize);
 
     // call the main session loop that does all the work
     currentSession.MainLoop();
