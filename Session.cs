@@ -203,9 +203,9 @@ internal class Session
         /* Layout looks like:
          *  Stop current entry and start a new one
          *  Log a task group
+         *  View deleted entries
          *  Stop tracking
          *  Exit
-         *  View deleted entries
          *  [list of selectable entries with details]
         */
 
@@ -218,9 +218,9 @@ internal class Session
         {
             -1, // stop/start option
             -2, // log task group option
+            -5, // view deleted entries option
             -3, // stop tracking option
-            -4, // exit option
-            -5  // view deleted entries option
+            -4  // exit option
         };
         foreach(int entryId in _timeEntries.Keys.Reverse())
         {
