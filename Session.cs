@@ -190,9 +190,11 @@ internal class Session
     }
 
     // prints e.g. "Total unlogged task time: 01:15   Total time: 02:40" as its own line
+    // (trailing blank line separates it from the menu that follows)
     private void RenderTotalsLine(double totalUnloggedMins, double totalTotalMins)
     {
         AnsiConsole.MarkupLine($"[bold]Total unlogged task time:[/] {TimeSpan.FromMinutes(totalUnloggedMins):hh\\:mm}    [bold]Total time:[/] {TimeSpan.FromMinutes(totalTotalMins):hh\\:mm}");
+        AnsiConsole.WriteLine();
     }
 
     private void DisplayMainMenu()
