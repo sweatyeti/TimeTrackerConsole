@@ -318,6 +318,17 @@ internal class Session
             .DefaultIfEmpty(0)
             .Max();
 
+        // time column: "HH:mm - HH:mm" for completed entries, "HH:mm - In
+        // Progress" for the active entry — variable, so pad it to the widest
+        // time string to keep the trailing columns aligned (issue #19).
+        int timeWidth = _timeEntries.Values
+            .Where(e => !e.IsDeleted)
+            .Select(e => e.IsComplete
+                ? $"{e.StartTime:HH:mm} - {e.EndTime:HH:mm}".Length
+                : $"{e.StartTime:HH:mm} - In Progress".Length)
+            .DefaultIfEmpty(0)
+            .Max();
+
         // status text: In Progress / Logged / Unlogged (the logged/unlogged
         // marker is only shown for completed entries with a real task)
         string loggedText = entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase)
@@ -328,7 +339,11 @@ internal class Session
 
         string idPart = $"#{entry.Id}".PadRight(idWidth + 1);
         string taskPart = Markup.Escape(entry.Task).PadRight(taskWidth);
-        string timePart = entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[blue bold]In Progress[/]";
+
+        // pad the PLAIN time text to the fixed width, then wrap in markup so the
+        // tags don't count against the pad (markup is zero-width when rendered)
+        string timeText = $"{entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "In Progress")}".PadRight(timeWidth);
+        string timePart = entry.IsComplete ? timeText : $"[blue bold]{timeText}[/]";
 
         string row = $"[CadetBlue]{idPart} | {taskPart} | {timePart}";
         if(loggedText.Length > 0)
