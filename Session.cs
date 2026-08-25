@@ -555,7 +555,8 @@ internal class Session
         IEnumerable<TimeEntry> deletedEntries = _timeEntries.Values.Where(entry => entry.IsDeleted).OrderBy(entry => entry.Id);
         if(!deletedEntries.Any())
         {
-            AnsiConsole.MarkupLine("[red bold]No deleted entries.[/]");
+            AnsiConsole.MarkupLine("[red bold]No deleted entries. Press any key to continue...[/]");
+            AnsiConsole.Console.Input.ReadKey(true);
             return;
         }
 
