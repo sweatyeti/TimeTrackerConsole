@@ -293,10 +293,51 @@ internal class Session
         // (deleted entries are never presented as choices, but guard against rendering one just in case)
         if(_timeEntries.TryGetValue(choice, out TimeEntry? entry) && !entry.IsDeleted)
         {
-            result = $"[CadetBlue]#{entry.Id} | Task: {Markup.Escape(entry.Task)} | {entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[blue bold]In Progress[/]")} {(entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase) ? string.Empty : entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{Markup.Escape(entry.Description)}")}[/]";
+            result = BuildEntryRow(entry);
         }
 
         return result;
+    }
+
+    // builds one entry row for the main menu. Spectre pads each menu row to the
+    // same total width, but it does NOT align fields WITHIN a row, so every
+    // variable-width field is padded to a fixed column width (derived from the
+    // live entry set) to keep the columns visually aligned (issue #19).
+    private string BuildEntryRow(TimeEntry entry)
+    {
+        // column widths: id, task, time, status, description are all variable
+        int idWidth = _timeEntries.Values
+            .Where(e => !e.IsDeleted)
+            .Select(e => e.Id.ToString().Length)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        int taskWidth = _timeEntries.Values
+            .Where(e => !e.IsDeleted)
+            .Select(e => e.Task.Length)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        // status text: In Progress / Logged / Unlogged (the logged/unlogged
+        // marker is only shown for completed entries with a real task)
+        string loggedText = entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase)
+            ? string.Empty
+            : entry.IsComplete
+                ? entry.Logged ? "Logged" : "Unlogged"
+                : string.Empty;
+
+        string idPart = $"#{entry.Id}".PadRight(idWidth + 1);
+        string taskPart = Markup.Escape(entry.Task).PadRight(taskWidth);
+        string timePart = entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[blue bold]In Progress[/]";
+
+        string row = $"[CadetBlue]{idPart} | {taskPart} | {timePart}";
+        if(loggedText.Length > 0)
+        {
+            row += $" | {(entry.Logged ? "[green]Logged[/]" : "[red]Unlogged[/]")}";
+        }
+        row += $" | {(string.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : Markup.Escape(entry.Description))}[/]";
+
+        return row;
     }
 
     private void PresentSessionMenu()
