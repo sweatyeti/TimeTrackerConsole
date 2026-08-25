@@ -189,10 +189,10 @@ internal class Session
         RenderTotalsLine(totalUnloggedMins, totalTotalMins);
     }
 
-    // prints e.g. "Total unlogged time: 01:15   Total time: 02:40" as its own line
+    // prints e.g. "Total unlogged task time: 01:15   Total time: 02:40" as its own line
     private void RenderTotalsLine(double totalUnloggedMins, double totalTotalMins)
     {
-        AnsiConsole.MarkupLine($"[bold]Total unlogged time:[/] {TimeSpan.FromMinutes(totalUnloggedMins):hh\\:mm}    [bold]Total time:[/] {TimeSpan.FromMinutes(totalTotalMins):hh\\:mm}");
+        AnsiConsole.MarkupLine($"[bold]Total unlogged task time:[/] {TimeSpan.FromMinutes(totalUnloggedMins):hh\\:mm}    [bold]Total time:[/] {TimeSpan.FromMinutes(totalTotalMins):hh\\:mm}");
     }
 
     private void DisplayMainMenu()
