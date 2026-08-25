@@ -167,7 +167,6 @@ internal class Session
         table.AddColumns("Task", "Count", "Unlogged (hh:mm)", "Total (hh:mm)");
 
         // totals accumulated only across non-empty-task groups (issue #15)
-        int totalEntryCount = 0;
         double totalUnloggedMins = 0;
         double totalTotalMins = 0;
 
@@ -176,7 +175,6 @@ internal class Session
             bool emptyTask = string.IsNullOrEmpty(taskGroup.Task) || taskGroup.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
             if(!emptyTask)
             {
-                totalEntryCount += taskGroup.EntryCount;
                 totalUnloggedMins += taskGroup.UnloggedMins;
                 totalTotalMins += taskGroup.TotalMins;
             }
@@ -184,10 +182,17 @@ internal class Session
             table.AddRow(Markup.Escape(taskGroup.Task), taskGroup.EntryCount.ToString(), $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
         }
 
-        // totals row - excludes entries that aren't part of a task (the "none"/empty group)
-        table.AddRow("[bold]Total[/]", totalEntryCount.ToString(), $"{TimeSpan.FromMinutes(totalUnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(totalTotalMins):hh\\:mm}");
-
         AnsiConsole.Write(table);
+
+        // issue #15: totals render as a single line BETWEEN the summary table and the
+        // menu/list (not as a row inside the table); excludes entries not part of a task
+        RenderTotalsLine(totalUnloggedMins, totalTotalMins);
+    }
+
+    // prints e.g. "Total unlogged time: 01:15   Total time: 02:40" as its own line
+    private void RenderTotalsLine(double totalUnloggedMins, double totalTotalMins)
+    {
+        AnsiConsole.MarkupLine($"[bold]Total unlogged time:[/] {TimeSpan.FromMinutes(totalUnloggedMins):hh\\:mm}    [bold]Total time:[/] {TimeSpan.FromMinutes(totalTotalMins):hh\\:mm}");
     }
 
     private void DisplayMainMenu()
