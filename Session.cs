@@ -15,6 +15,10 @@ internal class Session
     // (instead of Environment.Exit) and Program.Main can run the final flush
     private bool _shouldExit;
 
+    // main-menu page size (how many admin options + entries show before paging);
+    // set from the --page-size CLI switch, defaults to 30
+    private int _pageSize = 30;
+
     public string Name { get; set; } = string.Empty;
     public bool IsActive {get; private set;} = false;
     public int EntryCount => _timeEntries.Values.Count(entry => !entry.IsDeleted);
@@ -25,7 +29,7 @@ internal class Session
     public DateTime StartedAt { get; private set; }
     public DateTime? EndedAt { get; private set; }
 
-    public static Session StartNew(string? name, bool useOldMenu)
+    public static Session StartNew(string? name, bool useOldMenu, int pageSize = 30)
     {
         Session session = new();
         _usingNewMenu = !useOldMenu;
@@ -35,6 +39,7 @@ internal class Session
             name = $"Session {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
         }
         session.Name = name;
+        session._pageSize = pageSize;
         session.SessionId = Guid.NewGuid();
         session.StartedAt = DateTime.Now;
 
@@ -130,7 +135,7 @@ internal class Session
             bool exists = _timeEntries.TryGetValue(i, out TimeEntry? entry);
             if(!exists || entry is null || entry.IsDeleted) continue;
 
-            table.AddRow(entry.Id.ToString(), entry.StartTime.ToString("yyyy-MM-dd HH:mm"), entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "In Progress", Markup.Escape(entry.Task), entry.Logged ? "yes" : "no", Markup.Escape(entry.Description));
+            table.AddRow(entry.Id.ToString(), entry.StartTime.ToString("yyyy-MM-dd HH:mm"), entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "[blue bold]In Progress[/]", Markup.Escape(entry.Task), entry.Logged ? "yes" : "no", Markup.Escape(entry.Description));
         }
 
         AnsiConsole.Write(table);
@@ -161,18 +166,26 @@ internal class Session
 
         table.AddColumns("Task", "Count", "Unlogged (hh:mm)", "Total (hh:mm)");
 
-        TimeSpan totalTaskTimeForDay = TimeSpan.Zero;
+        // totals accumulated only across non-empty-task groups (issue #15)
+        int totalEntryCount = 0;
+        double totalUnloggedMins = 0;
+        double totalTotalMins = 0;
 
         foreach(var taskGroup in taskQuery)
         {
             bool emptyTask = string.IsNullOrEmpty(taskGroup.Task) || taskGroup.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
             if(!emptyTask)
             {
-                totalTaskTimeForDay += TimeSpan.FromMinutes(taskGroup.TotalMins);
+                totalEntryCount += taskGroup.EntryCount;
+                totalUnloggedMins += taskGroup.UnloggedMins;
+                totalTotalMins += taskGroup.TotalMins;
             }
 
             table.AddRow(Markup.Escape(taskGroup.Task), taskGroup.EntryCount.ToString(), $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
         }
+
+        // totals row - excludes entries that aren't part of a task (the "none"/empty group)
+        table.AddRow("[bold]Total[/]", totalEntryCount.ToString(), $"{TimeSpan.FromMinutes(totalUnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(totalTotalMins):hh\\:mm}");
 
         AnsiConsole.Write(table);
     }
@@ -213,7 +226,7 @@ internal class Session
         // the prompt under-the-hood works with the int values in entryChoices, but the converter will display the appropriate string for each choice (either a static admin option or an entry's details depending on the value)
         SelectionPrompt<int> theMenu = new SelectionPrompt<int>()
             .AddChoices(entryChoices)
-            .PageSize(20)
+            .PageSize(_pageSize)
             .WrapAround()
             .UseConverter(MainMenuConverter);
 
@@ -275,7 +288,7 @@ internal class Session
         // (deleted entries are never presented as choices, but guard against rendering one just in case)
         if(_timeEntries.TryGetValue(choice, out TimeEntry? entry) && !entry.IsDeleted)
         {
-            result = $"[CadetBlue]#{entry.Id} | Task: {Markup.Escape(entry.Task)} | {entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[green bold]In Progress[/]")} {(entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase) ? string.Empty : entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{Markup.Escape(entry.Description)}")}[/]";
+            result = $"[CadetBlue]#{entry.Id} | Task: {Markup.Escape(entry.Task)} | {entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[blue bold]In Progress[/]")} {(entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase) ? string.Empty : entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{Markup.Escape(entry.Description)}")}[/]";
         }
 
         return result;
@@ -379,7 +392,7 @@ internal class Session
             SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
                 .Title("Select an entry to update:")
                 .AddChoices(_timeEntries.Values.Where(entry => !entry.IsDeleted))
-                .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "In Progress")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})");
+                .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[blue bold]In Progress[/]")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})");
 
             entryPrompt.CancelResult = () => TimeEntry.GetEmpty(); // this will return an empty (invalid) entry to check against
             selectedEntry = entryPrompt.Show(AnsiConsole.Console);
@@ -455,15 +468,18 @@ internal class Session
 
     private void LogTaskGroupFlow()
     {
-        // get distinct task groups from entries (deleted entries don't count)
+        // get distinct task groups from entries that still have unlogged, completed work (deleted entries don't count)
         IEnumerable<string> taskGroups = _timeEntries.Values
-            .Where(entry => !entry.IsDeleted && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase))
+            .Where(entry => !entry.IsDeleted
+                         && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase)
+                         && entry.IsComplete
+                         && !entry.Logged)
             .Select(entry => entry.Task)
             .Distinct();
 
         if(!taskGroups.Any())
         {
-            AnsiConsole.MarkupLine("[red bold]No task groups to log. Press any key to continue...[/]");
+            AnsiConsole.MarkupLine("[red bold]No task groups with unlogged entries to log. Press any key to continue...[/]");
             AnsiConsole.Console.Input.ReadKey(true);
             return;
         }
@@ -471,7 +487,7 @@ internal class Session
         SelectionPrompt<string> taskGroupPrompt = new SelectionPrompt<string>()
             .Title("Select a task group to log (press ESC to cancel):")
             .AddChoices(taskGroups)
-            .UseConverter(taskGroup => $"{Markup.Escape(taskGroup)} ({_timeEntries.Values.Count(entry => !entry.IsDeleted && entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase))} entries)");
+            .UseConverter(taskGroup => $"{Markup.Escape(taskGroup)} ({_timeEntries.Values.Count(entry => !entry.IsDeleted && entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase) && entry.IsComplete && !entry.Logged)} unlogged)");
 
         taskGroupPrompt.CancelResult = () => string.Empty;
 
