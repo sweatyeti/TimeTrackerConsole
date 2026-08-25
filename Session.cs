@@ -21,7 +21,7 @@ internal class Session
 
     public string Name { get; set; } = string.Empty;
     public bool IsActive {get; private set;} = false;
-    public int EntryCount => _timeEntries.Count;
+    public int EntryCount => _timeEntries.Values.Count(entry => !entry.IsDeleted);
 
     // persisted in the session file so a future import can identify the session
     // from the file contents rather than the filename
@@ -89,6 +89,8 @@ internal class Session
     {
         lock(_store.MutationLock)
         {
+            // deleted entries are deliberately kept in the snapshot so they survive a
+            // restart and can later be viewed/restored from the "View deleted entries" menu
             List<EntrySnapshot> entries = new();
             foreach(int id in _timeEntries.Keys.OrderBy(id => id))
             {
@@ -100,7 +102,8 @@ internal class Session
                     entry.Task,
                     entry.Description,
                     entry.Logged,
-                    entry.IsComplete));
+                    entry.IsComplete,
+                    entry.IsDeleted));
             }
 
             return new SessionSnapshot(
@@ -130,8 +133,8 @@ internal class Session
         for(int i = 1; i <= TimeEntry.LatestAssignedID; i++)
         {
             bool exists = _timeEntries.TryGetValue(i, out TimeEntry? entry);
-            if(!exists || entry is null) continue;
-            
+            if(!exists || entry is null || entry.IsDeleted) continue;
+
             table.AddRow(entry.Id.ToString(), entry.StartTime.ToString("yyyy-MM-dd HH:mm"), entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "[blue bold]In Progress[/]", Markup.Escape(entry.Task), entry.Logged ? "yes" : "no", Markup.Escape(entry.Description));
         }
 
@@ -141,12 +144,12 @@ internal class Session
     // ref: https://github.com/sweatyeti/MyTimeTracker/blob/main/BlazorTimeKeeper/Components/Pages/Home.razor
     private void DisplaySummary()
     {
-        // if there are no entries then skip showing the summary section
-        if(_timeEntries.Count == 0) return;
+        // if there are no (non-deleted) entries then skip showing the summary section
+        if(EntryCount == 0) return;
 
         var taskQuery = 
             from entry in _timeEntries.Values
-            where entry.IsComplete == true
+            where entry.IsComplete == true && !entry.IsDeleted
             group entry by entry.Task.ToLower() into taskGroup
             select new
             {
@@ -197,26 +200,27 @@ internal class Session
          *  Log a task group
          *  Stop tracking
          *  Exit
+         *  View deleted entries
          *  [list of selectable entries with details]
         */
 
-        // need to determine how many choices will be presented to the user
-        int choiceCount = 4; // for the static options (stop/start, log task group, stop tracking, exit)
-        choiceCount += _timeEntries.Count; // add the number of entries to the choice count
-
-        int[] entryChoices = new int[choiceCount];
-        // using values <0 for admin options, and values >0 for entry options (corresponding to entry IDs)
-        // note: zero/0 as a value with not be used (so far) as entry IDs start at 1 and increment, and admin options are <0
-        entryChoices[0] = -1; // stop/start option
-        entryChoices[1] = -2; // log task group option
-        entryChoices[2] = -3; // stop tracking option
-        entryChoices[3] = -4; // exit option
-
-        int i = 4;
+        // build the choices densely: static admin options (<0) first, then the
+        // selectable entry IDs (>0) in reverse order. deleted entries are kept in
+        // _timeEntries but are NOT presented here - they're only reachable via the
+        // "View deleted entries" menu, so skip them when filling the choice list
+        // (sizing from the non-deleted count avoids 0-valued holes in the array)
+        List<int> entryChoices = new()
+        {
+            -1, // stop/start option
+            -2, // log task group option
+            -3, // stop tracking option
+            -4, // exit option
+            -5  // view deleted entries option
+        };
         foreach(int entryId in _timeEntries.Keys.Reverse())
         {
-            entryChoices[i] = entryId; 
-            i++;
+            if(_timeEntries[entryId].IsDeleted) continue;
+            entryChoices.Add(entryId);
         }
 
         // the prompt under-the-hood works with the int values in entryChoices, but the converter will display the appropriate string for each choice (either a static admin option or an entry's details depending on the value)
@@ -246,6 +250,9 @@ internal class Session
             case -4:
                 StopSession(exit: true);
                 break;
+            case -5:
+                ViewDeletedEntriesFlow();
+                break;
             default:
                 if(_timeEntries.ContainsKey(userChoice))
                 {
@@ -259,7 +266,6 @@ internal class Session
                 }
                 break;
         }
-        
 
     }
 
@@ -273,12 +279,14 @@ internal class Session
             -2 => "[Chartreuse2]Log a task group[/]",
             -3 => "[Chartreuse2]Stop tracking[/]",
             -4 => "[Chartreuse2]Stop and exit[/]",
+            -5 => "[Chartreuse2]View deleted entries[/]",
             _ => string.Empty
         };
         if(result != string.Empty) return result;
 
         // if the choice is not one of the static options, then it must be an entry choice, so find the entry with the matching ID and return its details as the converter result
-        if(_timeEntries.TryGetValue(choice, out TimeEntry? entry))
+        // (deleted entries are never presented as choices, but guard against rendering one just in case)
+        if(_timeEntries.TryGetValue(choice, out TimeEntry? entry) && !entry.IsDeleted)
         {
             result = $"[CadetBlue]#{entry.Id} | Task: {Markup.Escape(entry.Task)} | {entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[blue bold]In Progress[/]")} {(entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase) ? string.Empty : entry.IsComplete ? entry.Logged ? "| [green]Logged[/]" : "| [red]Unlogged[/]" : string.Empty)} | {(String.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : $"{Markup.Escape(entry.Description)}")}[/]";
         }
@@ -290,15 +298,16 @@ internal class Session
     {
         SelectionPrompt<int> initialPrompt = new SelectionPrompt<int>()
             .Title("Pick one:")
-            .AddChoices(new[] { 1, 2, 3, 4, 5, 6 })
+            .AddChoices(new[] { 1, 2, 3, 4, 5, 6, 7 })
             .UseConverter(choice => choice switch
             {
                 1 => IsActive ? "Stop current entry and start a new one" : "Start a new entry",
                 2 => "Update an entry",
                 3 => "Log a task group",
                 4 => "Delete an entry",
-                5 => "Stop current session",
-                6 => "Stop and exit",
+                5 => "View deleted entries",
+                6 => "Stop current session",
+                7 => "Stop and exit",
                 _ => throw new InvalidOperationException()
             });
 
@@ -320,9 +329,12 @@ internal class Session
                     DeleteEntryFlow();
                     break;
                 case 5:
-                    StopSession(exit: false);
+                    ViewDeletedEntriesFlow();
                     break;
                 case 6:
+                    StopSession(exit: false);
+                    break;
+                case 7:
                     StopSession(exit: true);
                     break;
                 default:
@@ -371,7 +383,7 @@ internal class Session
         TimeEntry? selectedEntry;
         if(entryId == 0 && !_usingNewMenu)
         {
-            if(_timeEntries.Count == 0)
+            if(EntryCount == 0)
             {
                 AnsiConsole.MarkupLine("[red bold]No entries to update.[/]");
                 return;
@@ -379,7 +391,7 @@ internal class Session
 
             SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
                 .Title("Select an entry to update:")
-                .AddChoices(_timeEntries.Values)
+                .AddChoices(_timeEntries.Values.Where(entry => !entry.IsDeleted))
                 .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[blue bold]In Progress[/]")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})");
 
             entryPrompt.CancelResult = () => TimeEntry.GetEmpty(); // this will return an empty (invalid) entry to check against
@@ -396,6 +408,20 @@ internal class Session
 
         // check if prompt was cancelled by checking if the returned TimeEntry is invalid
         if(!selectedEntry.IsValid) return;
+
+        // issue #12: deletion lives inside the edit entry view. only completed,
+        // non-deleted entries can be deleted - soft delete sets the IsDeleted flag
+        // (the entry stays in the store and is only reachable via "View deleted entries")
+        if(selectedEntry.IsComplete && !selectedEntry.IsDeleted
+           && AnsiConsole.Confirm($"Delete this entry? (id {selectedEntry.Id}, task '{Markup.Escape(selectedEntry.Task)}')", defaultValue: false))
+        {
+            lock(_store.MutationLock)
+            {
+                selectedEntry.IsDeleted = true;
+            }
+            _store.MarkDirty();
+            return;
+        }
 
         // gather ALL prompt inputs first, then apply them in a single atomic
         // mutation under the lock (was three separate lock blocks - the entry
@@ -442,9 +468,10 @@ internal class Session
 
     private void LogTaskGroupFlow()
     {
-        // get distinct task groups from entries that still have unlogged, completed work
+        // get distinct task groups from entries that still have unlogged, completed work (deleted entries don't count)
         IEnumerable<string> taskGroups = _timeEntries.Values
-            .Where(entry => !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase)
+            .Where(entry => !entry.IsDeleted
+                         && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase)
                          && entry.IsComplete
                          && !entry.Logged)
             .Select(entry => entry.Task)
@@ -460,7 +487,7 @@ internal class Session
         SelectionPrompt<string> taskGroupPrompt = new SelectionPrompt<string>()
             .Title("Select a task group to log (press ESC to cancel):")
             .AddChoices(taskGroups)
-            .UseConverter(taskGroup => $"{Markup.Escape(taskGroup)} ({_timeEntries.Values.Count(entry => entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase) && entry.IsComplete && !entry.Logged)} unlogged)");
+            .UseConverter(taskGroup => $"{Markup.Escape(taskGroup)} ({_timeEntries.Values.Count(entry => !entry.IsDeleted && entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase) && entry.IsComplete && !entry.Logged)} unlogged)");
 
         taskGroupPrompt.CancelResult = () => string.Empty;
 
@@ -468,7 +495,7 @@ internal class Session
 
         if(string.IsNullOrEmpty(selectedTaskGroup)) return;
         
-        IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Values.Where(entry => entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
+        IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Values.Where(entry => !entry.IsDeleted && entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
 
         // single acquisition for the whole group: the lazy LINQ enumeration rides
         // inside the lock, so the snapshot can never see a partially-logged group
@@ -485,19 +512,21 @@ internal class Session
 
     private void DeleteEntryFlow()
     {
-        if(_timeEntries.Count == 0)
+        // only completed entries can be deleted, and already-deleted ones are not shown again
+        IEnumerable<TimeEntry> deletableEntries = _timeEntries.Values.Where(entry => entry.IsComplete && !entry.IsDeleted);
+        if(!deletableEntries.Any())
         {
-            AnsiConsole.MarkupLine("[red bold]No entries to delete.[/]");
+            AnsiConsole.MarkupLine("[red bold]No completed entries to delete.[/]");
             return;
         }
 
         SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
             .Title("Select an entry to delete:")
-            .AddChoices(_timeEntries.Values)
-            .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:yyyy-MM-dd HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "In Progress")})");
-        
+            .AddChoices(deletableEntries)
+            .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:yyyy-MM-dd HH:mm} - {entry.EndTime.ToString("yyyy-MM-dd HH:mm")})");
+
         entryPrompt.CancelResult = () => TimeEntry.GetEmpty();
-        
+
         TimeEntry selectedEntry = entryPrompt.Show(AnsiConsole.Console);
 
         if (!selectedEntry.IsValid || !AnsiConsole.Confirm("Are you sure you want to delete this entry?", defaultValue: true))
@@ -505,14 +534,46 @@ internal class Session
             return;
         }
 
-        // if the entry being deleted is currently active, flip the session's active switch to false before deleting the entry
-        if(selectedEntry == _timeEntries[TimeEntry.LatestAssignedID] && IsActive && !selectedEntry.IsComplete)
-        {
-            IsActive = false;
-        }
+        // soft delete: flag the entry instead of removing it from the store so it can
+        // later be viewed and restored from the "View deleted entries" menu
         lock(_store.MutationLock)
         {
-            _timeEntries.Remove(selectedEntry.Id);
+            selectedEntry.IsDeleted = true;
+        }
+        _store.MarkDirty();
+    }
+
+    // the only place deleted entries are viewable: lists them oldest-first and
+    // restores the selected one by flipping its IsDeleted flag back to false
+    private void ViewDeletedEntriesFlow()
+    {
+        IEnumerable<TimeEntry> deletedEntries = _timeEntries.Values.Where(entry => entry.IsDeleted).OrderBy(entry => entry.Id);
+        if(!deletedEntries.Any())
+        {
+            AnsiConsole.MarkupLine("[red bold]No deleted entries.[/]");
+            return;
+        }
+
+        SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
+            .Title("Select a deleted entry to restore (press ESC to cancel):")
+            .AddChoices(deletedEntries)
+            .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:yyyy-MM-dd HH:mm} - {entry.EndTime.ToString("yyyy-MM-dd HH:mm")}) [red](deleted)[/]");
+
+        entryPrompt.CancelResult = () => TimeEntry.GetEmpty(); // this will return an empty (invalid) entry to check against
+
+        TimeEntry selectedEntry = entryPrompt.Show(AnsiConsole.Console);
+
+        // check if prompt was cancelled by checking if the returned TimeEntry is invalid
+        if(!selectedEntry.IsValid) return;
+
+        if(!AnsiConsole.Confirm("Restore this entry?", defaultValue: true))
+        {
+            return;
+        }
+
+        lock(_store.MutationLock)
+        {
+            selectedEntry.IsDeleted = false;
         }
         _store.MarkDirty();
     }
