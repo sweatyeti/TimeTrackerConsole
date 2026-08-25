@@ -28,7 +28,8 @@ dotnet run -- new
 - Stop current entry and start a new one
 - Update entry (toggle logged, edit task, edit description)
 - Log an entire task group (marks all completed entries as logged)
-- Delete entry (with confirmation)
+- Delete entry (completed entries only, from the edit-entry view — soft delete; the entry is kept in the store and only shown under "View deleted entries")
+- View deleted entries (the only place deleted entries are visible; restore an individual entry here by flipping its flag back)
 - Stop tracking / Stop and exit
 
 ## Persistence
@@ -44,7 +45,7 @@ Sessions are written to `entries/` as JSON — one file per session — by a bac
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "sessionId": "084120d5-51ab-4a6b-87e8-5a115adb0573",
   "name": "Smoke [Test]",
   "startedAt": "2026-08-22T01:22:46.4250603+00:00",
@@ -57,7 +58,8 @@ Sessions are written to `entries/` as JSON — one file per session — by a bac
       "task": "task-one",
       "description": "",
       "logged": false,
-      "isComplete": false
+      "isComplete": false,
+      "isDeleted": false
     }
   ]
 }
@@ -69,7 +71,7 @@ Sessions are written to `entries/` as JSON — one file per session — by a bac
 Program.cs       — CLI entry point (System.CommandLine); final store flush on exit
 Session.cs       — Main loop, menus, entry CRUD, summary (Spectre.Console)
 EntryStore.cs    — On-disk store: 5s periodic flush, dirty flag, atomic writes
-TimeEntry.cs     — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete)
+TimeEntry.cs     — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete, IsDeleted)
 ```
 
 ## Design Note

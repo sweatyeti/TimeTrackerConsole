@@ -12,7 +12,7 @@ using System.Text.Json.Serialization;
 // under the mutation lock, and only that (fast) copy holds the lock - never disk I/O.
 internal sealed class EntryStore
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(5);
 
@@ -244,7 +244,9 @@ internal sealed record SessionSnapshot(
     DateTime? EndedAt,
     List<EntrySnapshot> Entries);
 
-// IsValid is deliberately not part of the snapshot - it is a runtime sentinel only
+// IsValid is deliberately not part of the snapshot - it is a runtime sentinel only.
+// IsDeleted is additive (schema v2): v1 files without the field deserialize with
+// the default value of false, so no migration is required
 internal sealed record EntrySnapshot(
     int Id,
     DateTime StartTime,
@@ -252,4 +254,5 @@ internal sealed record EntrySnapshot(
     string Task,
     string Description,
     bool Logged,
-    bool IsComplete);
+    bool IsComplete,
+    bool IsDeleted);
