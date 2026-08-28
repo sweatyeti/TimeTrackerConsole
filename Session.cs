@@ -1,3 +1,4 @@
+using System.Linq;
 using Spectre.Console;
 
 internal class Session
@@ -55,7 +56,49 @@ internal class Session
         return session;
     }
 
-    // TODO: implement a load-from-file task that can be used to load a previous session and continue tracking time in it
+    // resumes a session from a previously saved snapshot, continuing to write
+    // to the same file on disk
+    public static Session Resume(SessionSnapshot snapshot, string filePath, bool useOldMenu, int pageSize)
+    {
+        Session session = new();
+        _usingNewMenu = !useOldMenu;
+
+        session.Name = snapshot.Name ?? "Unnamed session";
+        session._pageSize = pageSize;
+        session.SessionId = snapshot.SessionId;
+        session.StartedAt = snapshot.StartedAt;
+        session.EndedAt = null; // resuming means the session is active again
+
+        // wire up the store targeting the EXISTING file (no collision-free path)
+        session._store = EntryStore.ForExistingFile(session, filePath);
+
+        // reconstruct entries from the snapshot
+        int maxId = 0;
+        lock(session._store.MutationLock)
+        {
+            foreach(EntrySnapshot es in snapshot.Entries)
+            {
+                TimeEntry entry = TimeEntry.FromSnapshot(
+                    es.Id, es.StartTime, es.EndTime, es.Task,
+                    es.Description, es.Logged, es.IsComplete, es.IsDeleted);
+                session._timeEntries[entry.Id] = entry;
+                if(es.Id > maxId) maxId = es.Id;
+            }
+        }
+
+        // reseed the static ID counter so new entries don't collide with existing IDs
+        TimeEntry.ReseedId(maxId + 1);
+
+        // if there is an in-progress (non-deleted, not complete) entry the session is active
+        session.IsActive = session._timeEntries.Values.Any(e => !e.IsDeleted && !e.IsComplete);
+
+        // start the background flush loop, then mark dirty so the reactivated state
+        // (EndedAt back to null) is persisted to the file on the next flush
+        session._store.Start();
+        session._store.MarkDirty();
+
+        return session;
+    }
 
     public void MainLoop()
     {

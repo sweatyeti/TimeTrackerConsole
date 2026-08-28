@@ -33,4 +33,29 @@ public class TimeEntry
             StartTime = DateTime.Now
         };
     }
+
+    // reseeds the static ID counter after a session is resumed from disk, so new
+    // entries continue after the highest ID already present (avoids ID collisions)
+    public static void ReseedId(int nextId)
+    {
+        _nextId = nextId;
+    }
+
+    // reconstructs an entry from its persisted snapshot fields (IsValid is a runtime
+    // sentinel only, so reconstructed entries are always valid)
+    public static TimeEntry FromSnapshot(int id, DateTime startTime, DateTime? endTime, string task, string description, bool logged, bool isComplete, bool isDeleted)
+    {
+        return new TimeEntry
+        {
+            Id = id,
+            StartTime = startTime,
+            EndTime = endTime ?? DateTime.MinValue,
+            Task = task,
+            Description = description,
+            Logged = logged,
+            IsComplete = isComplete,
+            IsDeleted = isDeleted,
+            IsValid = true
+        };
+    }
 }

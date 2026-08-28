@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -56,6 +57,26 @@ internal sealed class EntryStore
         _tmpPath = _filePath + ".tmp";
     }
 
+    // constructor for resuming an existing session: targets the exact file path the
+    // session was previously written to (skipping collision-free resolution) so the
+    // resumed session keeps appending to the same file instead of forking a new one.
+    // the `resume` bool is only there to distinguish this overload from the public
+    // (Session, string sessionName) constructor above (same parameter types otherwise).
+    private EntryStore(Session session, string existingFilePath, bool resume)
+    {
+        _session = session;
+
+        _directoryPath = Path.Combine(Directory.GetCurrentDirectory(), "entries");
+        Directory.CreateDirectory(_directoryPath);
+
+        _filePath = existingFilePath;
+        _tmpPath = _filePath + ".tmp";
+    }
+
+    // resumes a session against an existing file path
+    public static EntryStore ForExistingFile(Session session, string existingFilePath)
+        => new(session, existingFilePath, resume: true);
+
     // called by the Session at every mutation site - just raises the flag the
     // background loop checks every 5 seconds
     public void MarkDirty()
@@ -89,6 +110,39 @@ internal sealed class EntryStore
 
         _dirty = true;
         await TryFlushAsync();
+    }
+
+    // deserializes a SessionSnapshot from an existing file on disk; returns null on any error
+    public static SessionSnapshot? LoadSnapshot(string filePath)
+    {
+        try
+        {
+            string json = File.ReadAllText(filePath);
+            return JsonSerializer.Deserialize<SessionSnapshot>(json, JsonOptions);
+        }
+        catch(Exception)
+        {
+            return null;
+        }
+    }
+
+    // enumerates all session files (newest-first) for the continue subcommand
+    public static List<(SessionSnapshot Snapshot, string FilePath)> ListAllSessions()
+    {
+        string dir = Path.Combine(Directory.GetCurrentDirectory(), "entries");
+        if(!Directory.Exists(dir)) return new List<(SessionSnapshot Snapshot, string FilePath)>();
+
+        List<(SessionSnapshot Snapshot, string FilePath)> results = new();
+        foreach(string file in Directory.EnumerateFiles(dir, "*.json"))
+        {
+            SessionSnapshot? snap = LoadSnapshot(file);
+            if(snap is not null)
+            {
+                results.Add((snap, file));
+            }
+        }
+
+        return results.OrderByDescending(x => x.Snapshot.StartedAt).ToList();
     }
 
     private async Task RunFlushLoopAsync()
