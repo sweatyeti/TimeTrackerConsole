@@ -17,12 +17,6 @@ Option<string?> nameOption = new("--name")
 nameOption.Aliases.Add("-n");
 newSubCommand.Options.Add(nameOption);
 
-Option<bool> useOldMenuOption = new("--old-menu")
-{
-    Description = "Use the old menu system instead of the new one."
-};
-newSubCommand.Options.Add(useOldMenuOption);
-
 Option<int> pageSizeOption = new("--page-size")
 {
     Description = "Number of menu items (admin options + entries) shown in the main menu before paging. Default: 30."
@@ -32,15 +26,8 @@ newSubCommand.Options.Add(pageSizeOption);
 
 newSubCommand.SetAction(parseResult => NewSession(
     parseResult.GetValue(nameOption),
-    parseResult.GetValue(useOldMenuOption),
     parseResult.GetValue(pageSizeOption)
 ));
-
-Option<bool> continueOldMenuOption = new("--old-menu")
-{
-    Description = "Use the old menu system instead of the new one."
-};
-continueSubCommand.Options.Add(continueOldMenuOption);
 
 Option<int> continuePageSizeOption = new("--page-size")
 {
@@ -50,15 +37,14 @@ continuePageSizeOption.DefaultValueFactory = _ => 30;
 continueSubCommand.Options.Add(continuePageSizeOption);
 
 continueSubCommand.SetAction(parseResult => ContinueSession(
-    parseResult.GetValue(continueOldMenuOption),
     parseResult.GetValue(continuePageSizeOption)
 ));
 
 return rootCommand.Parse(args).Invoke();
 
-static void NewSession(string? name, bool useOldMenu = false, int pageSize = 30)
+static void NewSession(string? name, int pageSize = 30)
 {
-    Session currentSession = Session.StartNew(name, useOldMenu, pageSize);
+    Session currentSession = Session.StartNew(name, pageSize);
 
     // call the main session loop that does all the work
     currentSession.MainLoop();
@@ -69,7 +55,7 @@ static void NewSession(string? name, bool useOldMenu = false, int pageSize = 30)
     currentSession.Shutdown();
 }
 
-static void ContinueSession(bool useOldMenu = false, int pageSize = 30)
+static void ContinueSession(int pageSize = 30)
 {
     List<(SessionSnapshot Snapshot, string FilePath)> sessions = EntryStore.ListAllSessions();
     if(sessions.Count == 0)
@@ -115,7 +101,7 @@ static void ContinueSession(bool useOldMenu = false, int pageSize = 30)
     if(choice == 0) return;
 
     (SessionSnapshot snapshot, string filePath) = sessions[choice - 1];
-    Session resumed = Session.Resume(snapshot, filePath, useOldMenu, pageSize);
+    Session resumed = Session.Resume(snapshot, filePath, pageSize);
     resumed.MainLoop();
     resumed.Shutdown();
 }
