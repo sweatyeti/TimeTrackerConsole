@@ -10,18 +10,23 @@ cd TimeTrackerConsole
 dotnet run -- new
 ```
 
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `new` | Start a new session |
+| `continue` | List previous sessions (newest first) and resume one; sessions that didn't exit cleanly are marked "(unfinished)" |
+
 ## Flags
 
 | Flag | Description |
 |------|-------------|
-| `--old-menu` | Classic full-table view with numbered action picker |
 | `--name <value>` | Optional session name |
+| `--page-size <n>` | Number of menu items shown before paging (default: 30) |
 
-## Menus
+## Menu
 
-**New menu (default):** Summary table (task groups with counts/time) + combined admin/entry selector. In-progress entries highlighted green. Logged/unlogged status shown.
-
-**Old menu (`--old-menu`):** Full entries table with all columns, summary table, then a numbered action picker.
+Single combined menu: summary table (task groups with counts/time) + admin/entry selector. In-progress entries highlighted green. Logged/unlogged status shown.
 
 ## Actions
 
@@ -68,7 +73,7 @@ Sessions are written to `entries/` as JSON — one file per session — by a bac
 ## Project Structure
 
 ```
-Program.cs       — CLI entry point (System.CommandLine); final store flush on exit
+Program.cs       — CLI entry point (System.CommandLine; `new` + `continue` commands); final store flush on exit
 Session.cs       — Main loop, menus, entry CRUD, summary (Spectre.Console)
 EntryStore.cs    — On-disk store: 5s periodic flush, dirty flag, atomic writes
 TimeEntry.cs     — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete, IsDeleted)

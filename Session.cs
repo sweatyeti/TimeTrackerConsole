@@ -1,3 +1,4 @@
+using System.Linq;
 using Spectre.Console;
 
 internal class Session
@@ -5,7 +6,6 @@ internal class Session
     private Session() { }
 
     private readonly Dictionary<int, TimeEntry> _timeEntries = new();
-    private static bool _usingNewMenu = true;
 
     // owns the background flush loop, the dirty flag, and the mutation lock;
     // initialized in StartNew before any mutation can happen
@@ -29,10 +29,9 @@ internal class Session
     public DateTime StartedAt { get; private set; }
     public DateTime? EndedAt { get; private set; }
 
-    public static Session StartNew(string? name, bool useOldMenu, int pageSize = 30)
+    public static Session StartNew(string? name, int pageSize = 30)
     {
         Session session = new();
-        _usingNewMenu = !useOldMenu;
 
         if(String.IsNullOrEmpty(name))
         {
@@ -55,24 +54,56 @@ internal class Session
         return session;
     }
 
-    // TODO: implement a load-from-file task that can be used to load a previous session and continue tracking time in it
+    // resumes a session from a previously saved snapshot, continuing to write
+    // to the same file on disk
+    public static Session Resume(SessionSnapshot snapshot, string filePath, int pageSize)
+    {
+        Session session = new();
+
+        session.Name = snapshot.Name ?? "Unnamed session";
+        session._pageSize = pageSize;
+        session.SessionId = snapshot.SessionId;
+        session.StartedAt = snapshot.StartedAt;
+        session.EndedAt = null; // resuming means the session is active again
+
+        // wire up the store targeting the EXISTING file (no collision-free path)
+        session._store = EntryStore.ForExistingFile(session, filePath);
+
+        // reconstruct entries from the snapshot
+        int maxId = 0;
+        lock(session._store.MutationLock)
+        {
+            foreach(EntrySnapshot es in snapshot.Entries)
+            {
+                TimeEntry entry = TimeEntry.FromSnapshot(
+                    es.Id, es.StartTime, es.EndTime, es.Task,
+                    es.Description, es.Logged, es.IsComplete, es.IsDeleted);
+                session._timeEntries[entry.Id] = entry;
+                if(es.Id > maxId) maxId = es.Id;
+            }
+        }
+
+        // reseed the static ID counter so new entries don't collide with existing IDs
+        TimeEntry.ReseedId(maxId + 1);
+
+        // if there is an in-progress (non-deleted, not complete) entry the session is active
+        session.IsActive = session._timeEntries.Values.Any(e => !e.IsDeleted && !e.IsComplete);
+
+        // start the background flush loop, then mark dirty so the reactivated state
+        // (EndedAt back to null) is persisted to the file on the next flush
+        session._store.Start();
+        session._store.MarkDirty();
+
+        return session;
+    }
 
     public void MainLoop()
     {
         while(!_shouldExit)
         {
             AnsiConsole.Clear();
-            if(_usingNewMenu)
-             {
-                DisplaySummary();
-                DisplayMainMenu();
-             }
-             else
-             {
-                DisplayEntries();
-                DisplaySummary();
-                PresentSessionMenu();
-             }
+            DisplaySummary();
+            DisplayMainMenu();
         }
     }
 
@@ -357,55 +388,6 @@ internal class Session
         return row;
     }
 
-    private void PresentSessionMenu()
-    {
-        SelectionPrompt<int> initialPrompt = new SelectionPrompt<int>()
-            .Title("Pick one:")
-            .AddChoices(new[] { 1, 2, 3, 4, 5, 6, 7 })
-            .UseConverter(choice => choice switch
-            {
-                1 => IsActive ? "Stop current entry and start a new one" : "Start a new entry",
-                2 => "Update an entry",
-                3 => "Log a task group",
-                4 => "Delete an entry",
-                5 => "View deleted entries",
-                6 => "Stop current session",
-                7 => "Stop and exit",
-                _ => throw new InvalidOperationException()
-            });
-
-            int userChoice = initialPrompt.Show(AnsiConsole.Console);
-
-            switch (userChoice)
-            {
-                case 1:
-                    StopCurrentEntry();
-                    StartNewEntry();
-                    break;
-                case 2:
-                    UpdateEntryFlow();
-                    break;
-                case 3:
-                    LogTaskGroupFlow();
-                    break;
-                case 4:
-                    DeleteEntryFlow();
-                    break;
-                case 5:
-                    ViewDeletedEntriesFlow();
-                    break;
-                case 6:
-                    StopSession(exit: false);
-                    break;
-                case 7:
-                    StopSession(exit: true);
-                    break;
-                default:
-                    throw new InvalidOperationException();
-
-            }
-    }
-
     private void StartNewEntry()
     {
         TimeEntry newEntry = TimeEntry.GetNextEntry();
@@ -441,32 +423,13 @@ internal class Session
         _store.MarkDirty();
     }
 
-    private void UpdateEntryFlow(int entryId = 0)
+    private void UpdateEntryFlow(int entryId)
     {
         TimeEntry? selectedEntry;
-        if(entryId == 0 && !_usingNewMenu)
+        if(!_timeEntries.TryGetValue(entryId, out selectedEntry))
         {
-            if(EntryCount == 0)
-            {
-                AnsiConsole.MarkupLine("[red bold]No entries to update.[/]");
-                return;
-            }
-
-            SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
-                .Title("Select an entry to update:")
-                .AddChoices(_timeEntries.Values.Where(entry => !entry.IsDeleted))
-                .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "[blue bold]In Progress[/]")} {(entry.IsComplete ? entry.Logged ? "[green](Logged)[/]" : "[red](Unlogged)[/]" : string.Empty)})");
-
-            entryPrompt.CancelResult = () => TimeEntry.GetEmpty(); // this will return an empty (invalid) entry to check against
-            selectedEntry = entryPrompt.Show(AnsiConsole.Console);
-        }
-        else
-        {
-            if(!_timeEntries.TryGetValue(entryId, out selectedEntry))
-            {
-                AnsiConsole.MarkupLine("[red bold]Selected entry not found.[/]");
-                return;
-            }
+            AnsiConsole.MarkupLine("[red bold]Selected entry not found.[/]");
+            return;
         }
 
         // check if prompt was cancelled by checking if the returned TimeEntry is invalid
