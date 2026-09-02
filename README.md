@@ -26,7 +26,7 @@ dotnet run -- new
 
 ## Menu
 
-Single combined menu: summary table (task groups with counts/time) + admin/entry selector. In-progress entries highlighted green. Logged/unlogged status shown.
+Single combined menu: summary table (task groups with counts/time) + admin/entry selector. In-progress entries highlighted green. A task's unlogged time is highlighted red in the summary. Logged/unlogged status shown.
 
 ## Actions
 
