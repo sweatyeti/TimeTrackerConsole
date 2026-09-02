@@ -210,7 +210,13 @@ internal class Session
                 totalTotalMins += taskGroup.TotalMins;
             }
 
-            table.AddRow(Markup.Escape(taskGroup.Task), taskGroup.EntryCount.ToString(), $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}", $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
+            // highlight unlogged time in red for named tasks that still have unlogged
+            // work (the "none" pseudo-task and zero-unlogged rows stay plain)
+            string unloggedCell = (!emptyTask && taskGroup.UnloggedMins > 0)
+                ? $"[red]{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}[/]"
+                : $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}";
+
+            table.AddRow(Markup.Escape(taskGroup.Task), taskGroup.EntryCount.ToString(), unloggedCell, $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
         }
 
         AnsiConsole.Write(table);
