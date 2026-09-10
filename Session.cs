@@ -103,6 +103,7 @@ internal class Session
         {
             AnsiConsole.Clear();
             DisplaySummary();
+            DisplayActiveStateBanner();
             DisplayMainMenu();
         }
     }
@@ -224,6 +225,20 @@ internal class Session
         // issue #15: totals render as a single line BETWEEN the summary table and the
         // menu/list (not as a row inside the table); excludes entries not part of a task
         RenderTotalsLine(totalUnloggedMins, totalTotalMins);
+    }
+
+    private void DisplayActiveStateBanner()
+    {
+        string label = IsActive ? "ACTIVE" : "NOT ACTIVE";
+        Color color = IsActive ? Color.Green : Color.Red;
+        string centeredLabel = label.PadLeft((13 + label.Length) / 2).PadRight(13);
+
+        Panel banner = new Panel(new Markup($"[{color.ToMarkup()}]{Markup.Escape(centeredLabel)}[/]"))
+            .Padding(0, 0)
+            .BorderColor(color);
+
+        AnsiConsole.Write(banner);
+        AnsiConsole.WriteLine();
     }
 
     // prints e.g. "Total unlogged task time: 01:15   Total time: 02:40" as its own line
