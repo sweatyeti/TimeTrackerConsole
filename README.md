@@ -8,6 +8,10 @@ C# .NET 10 console app for tracking time on tasks. Uses Spectre.Console + System
 git clone https://github.com/sweatyeti/TimeTrackerConsole.git
 cd TimeTrackerConsole
 dotnet run -- new
+
+# Alternate presentation theme
+dotnet run -- new --theme anime
+dotnet run -- continue --theme anime
 ```
 
 ## Commands
@@ -23,6 +27,9 @@ dotnet run -- new
 |------|-------------|
 | `--name <value>` | Optional session name |
 | `--page-size <n>` | Number of menu items shown before paging (default: 30) |
+| `--theme <current\|anime>` | Presentation theme (default: `current`; accepted case-insensitively) |
+
+`current` preserves the existing palette. `anime` is an original whimsical pastoral-fantasy palette with forest, sky, cream, and berry accents. Theme selection affects presentation only and is not stored in session files.
 
 ## Menu
 

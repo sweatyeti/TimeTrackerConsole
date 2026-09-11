@@ -5,6 +5,8 @@ internal class Session
 {
     private Session() { }
 
+    private ConsoleTheme _theme = null!;
+
     private readonly Dictionary<int, TimeEntry> _timeEntries = new();
 
     // owns the background flush loop, the dirty flag, and the mutation lock;
@@ -29,7 +31,7 @@ internal class Session
     public DateTime StartedAt { get; private set; }
     public DateTime? EndedAt { get; private set; }
 
-    public static Session StartNew(string? name, int pageSize = 30)
+    public static Session StartNew(string? name, int pageSize = 30, ConsoleTheme? theme = null)
     {
         Session session = new();
 
@@ -38,6 +40,7 @@ internal class Session
             name = $"Session {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
         }
         session.Name = name;
+        session._theme = theme ?? ConsoleTheme.Resolve(null);
         session._pageSize = pageSize;
         session.SessionId = Guid.NewGuid();
         session.StartedAt = DateTime.Now;
@@ -56,11 +59,12 @@ internal class Session
 
     // resumes a session from a previously saved snapshot, continuing to write
     // to the same file on disk
-    public static Session Resume(SessionSnapshot snapshot, string filePath, int pageSize)
+    public static Session Resume(SessionSnapshot snapshot, string filePath, int pageSize, ConsoleTheme? theme = null)
     {
         Session session = new();
 
         session.Name = snapshot.Name ?? "Unnamed session";
+        session._theme = theme ?? ConsoleTheme.Resolve(null);
         session._pageSize = pageSize;
         session.SessionId = snapshot.SessionId;
         session.StartedAt = snapshot.StartedAt;
@@ -152,8 +156,8 @@ internal class Session
     {
         Table table = new Table()
             .MinimalDoubleHeadBorder()
-            .BorderColor(Color.DarkOrange)
-            .Title($"[cyan bold]{Markup.Escape(Name)}[/]");
+            .BorderColor(_theme.DetailBorder)
+            .Title($"[{_theme.HeadingMarkup}]{Markup.Escape(Name)}[/]");
 
         table.AddColumn("#");
         table.AddColumn("Start Time", col => col.Centered());
@@ -167,7 +171,7 @@ internal class Session
             bool exists = _timeEntries.TryGetValue(i, out TimeEntry? entry);
             if(!exists || entry is null || entry.IsDeleted) continue;
 
-            table.AddRow(entry.Id.ToString(), entry.StartTime.ToString("yyyy-MM-dd HH:mm"), entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : "[blue bold]In Progress[/]", Markup.Escape(entry.Task), entry.Logged ? "yes" : "no", Markup.Escape(entry.Description));
+            table.AddRow(entry.Id.ToString(), entry.StartTime.ToString("yyyy-MM-dd HH:mm"), entry.IsComplete ? entry.EndTime.ToString("yyyy-MM-dd HH:mm") : $"[{_theme.InProgressMarkup}]In Progress[/]", Markup.Escape(entry.Task), entry.Logged ? "yes" : "no", Markup.Escape(entry.Description));
         }
 
         AnsiConsole.Write(table);
@@ -193,8 +197,8 @@ internal class Session
             
         Table table = new Table()
             .MarkdownBorder()
-            .BorderColor(Color.Blue)
-            .Title("[cyan bold]Summary[/]");
+            .BorderColor(_theme.SummaryBorder)
+            .Title($"[{_theme.HeadingMarkup}]Summary[/]");
 
         table.AddColumns("Task", "Count", "Unlogged (hh:mm)", "Total (hh:mm)");
 
@@ -214,7 +218,7 @@ internal class Session
             // highlight unlogged time in red for named tasks that still have unlogged
             // work (the "none" pseudo-task and zero-unlogged rows stay plain)
             string unloggedCell = (!emptyTask && taskGroup.UnloggedMins > 0)
-                ? $"[red]{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}[/]"
+                ? $"[{_theme.InactiveColor.ToMarkup()}]{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}[/]"
                 : $"{TimeSpan.FromMinutes(taskGroup.UnloggedMins):hh\\:mm}";
 
             table.AddRow(Markup.Escape(taskGroup.Task), taskGroup.EntryCount.ToString(), unloggedCell, $"{TimeSpan.FromMinutes(taskGroup.TotalMins):hh\\:mm}");
@@ -230,7 +234,7 @@ internal class Session
     private void DisplayActiveStateBanner()
     {
         string label = IsActive ? "ACTIVE" : "NOT ACTIVE";
-        Color color = IsActive ? Color.Green : Color.Red;
+        Color color = IsActive ? _theme.ActiveColor : _theme.InactiveColor;
         string centeredLabel = label.PadLeft((13 + label.Length) / 2).PadRight(13);
 
         Panel banner = new Panel(new Markup($"[{color.ToMarkup()}]{Markup.Escape(centeredLabel)}[/]"))
@@ -245,7 +249,7 @@ internal class Session
     // (trailing blank line separates it from the menu that follows)
     private void RenderTotalsLine(double totalUnloggedMins, double totalTotalMins)
     {
-        AnsiConsole.MarkupLine($"[bold]Total unlogged task time:[/] {TimeSpan.FromMinutes(totalUnloggedMins):hh\\:mm}    [bold]Total time:[/] {TimeSpan.FromMinutes(totalTotalMins):hh\\:mm}");
+        AnsiConsole.MarkupLine($"[{_theme.TotalsMarkup}]Total unlogged task time:[/] {TimeSpan.FromMinutes(totalUnloggedMins):hh\\:mm}    [{_theme.TotalsMarkup}]Total time:[/] {TimeSpan.FromMinutes(totalTotalMins):hh\\:mm}");
         AnsiConsole.WriteLine();
     }
 
@@ -289,7 +293,7 @@ internal class Session
             .WrapAround()
             .UseConverter(MainMenuConverter);
 
-        AnsiConsole.MarkupLine("[orange1 bold]Select an [Chartreuse2]option[/] or [CadetBlue]entry[/] to update:[/]");
+        AnsiConsole.MarkupLine($"[{_theme.PromptMarkup}]Select an [{_theme.AccentMarkup}]option[/] or [{_theme.SecondaryMarkup}]entry[/] to update:[/]");
 
         int userChoice = theMenu.Show(AnsiConsole.Console);
 
@@ -320,7 +324,7 @@ internal class Session
                 else
                 {
                     // should not reach here, but putting catch-all just in case
-                    AnsiConsole.MarkupLine("[red bold]Invalid choice. Press any key to continue...[/]");
+                    AnsiConsole.MarkupLine($"[{_theme.ErrorMarkup}]Invalid choice. Press any key to continue...[/]");
                     AnsiConsole.Console.Input.ReadKey(true);
                 }
                 break;
@@ -334,11 +338,11 @@ internal class Session
 
         string result = choice switch
         {
-            -1 => IsActive ? "[Chartreuse2]Stop current entry and start a new one[/]" : "[Chartreuse2]Start a new entry[/]",
-            -2 => "[Chartreuse2]Log a task group[/]",
-            -3 => "[Chartreuse2]Stop tracking[/]",
-            -4 => "[Chartreuse2]Stop and exit[/]",
-            -5 => "[Chartreuse2]View deleted entries[/]",
+            -1 => IsActive ? $"[{_theme.AccentMarkup}]Stop current entry and start a new one[/]" : $"[{_theme.AccentMarkup}]Start a new entry[/]",
+            -2 => $"[{_theme.AccentMarkup}]Log a task group[/]",
+            -3 => $"[{_theme.AccentMarkup}]Stop tracking[/]",
+            -4 => $"[{_theme.AccentMarkup}]Stop and exit[/]",
+            -5 => $"[{_theme.AccentMarkup}]View deleted entries[/]",
             _ => string.Empty
         };
         if(result != string.Empty) return result;
@@ -397,14 +401,14 @@ internal class Session
         // pad the PLAIN time text to the fixed width, then wrap in markup so the
         // tags don't count against the pad (markup is zero-width when rendered)
         string timeText = $"{entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "In Progress")}".PadRight(timeWidth);
-        string timePart = entry.IsComplete ? timeText : $"[blue bold]{timeText}[/]";
+        string timePart = entry.IsComplete ? timeText : $"[{_theme.InProgressMarkup}]{timeText}[/]";
 
-        string row = $"[CadetBlue]{idPart} | {taskPart} | {timePart}";
+        string row = $"[{_theme.SecondaryMarkup}]{idPart} | {taskPart} | {timePart}";
         if(loggedText.Length > 0)
         {
-            row += $" | {(entry.Logged ? "[green]Logged[/]" : "[red]Unlogged[/]")}";
+            row += $" | {(entry.Logged ? $"[{_theme.PositiveMarkup}]Logged[/]" : $"[{_theme.InactiveColor.ToMarkup()}]Unlogged[/]")}";
         }
-        row += $" | {(string.IsNullOrEmpty(entry.Description) ? "[gray]No description[/]" : Markup.Escape(entry.Description))}[/]";
+        row += $" | {(string.IsNullOrEmpty(entry.Description) ? $"[{_theme.MutedMarkup}]No description[/]" : Markup.Escape(entry.Description))}[/]";
 
         return row;
     }
@@ -449,7 +453,7 @@ internal class Session
         TimeEntry? selectedEntry;
         if(!_timeEntries.TryGetValue(entryId, out selectedEntry))
         {
-            AnsiConsole.MarkupLine("[red bold]Selected entry not found.[/]");
+            AnsiConsole.MarkupLine($"[{_theme.ErrorMarkup}]Selected entry not found.[/]");
             return;
         }
 
@@ -526,7 +530,7 @@ internal class Session
 
         if(!taskGroups.Any())
         {
-            AnsiConsole.MarkupLine("[red bold]No task groups with unlogged entries to log. Press any key to continue...[/]");
+            AnsiConsole.MarkupLine($"[{_theme.ErrorMarkup}]No task groups with unlogged entries to log. Press any key to continue...[/]");
             AnsiConsole.Console.Input.ReadKey(true);
             return;
         }
@@ -563,7 +567,7 @@ internal class Session
         IEnumerable<TimeEntry> deletableEntries = _timeEntries.Values.Where(entry => entry.IsComplete && !entry.IsDeleted);
         if(!deletableEntries.Any())
         {
-            AnsiConsole.MarkupLine("[red bold]No completed entries to delete.[/]");
+            AnsiConsole.MarkupLine($"[{_theme.ErrorMarkup}]No completed entries to delete.[/]");
             return;
         }
 
@@ -597,7 +601,7 @@ internal class Session
         IEnumerable<TimeEntry> deletedEntries = _timeEntries.Values.Where(entry => entry.IsDeleted).OrderBy(entry => entry.Id);
         if(!deletedEntries.Any())
         {
-            AnsiConsole.MarkupLine("[red bold]No deleted entries. Press any key to continue...[/]");
+            AnsiConsole.MarkupLine($"[{_theme.ErrorMarkup}]No deleted entries. Press any key to continue...[/]");
             AnsiConsole.Console.Input.ReadKey(true);
             return;
         }
@@ -605,7 +609,7 @@ internal class Session
         SelectionPrompt<TimeEntry> entryPrompt = new SelectionPrompt<TimeEntry>()
             .Title("Select a deleted entry to restore (press ESC to cancel):")
             .AddChoices(deletedEntries)
-            .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:yyyy-MM-dd HH:mm} - {entry.EndTime.ToString("yyyy-MM-dd HH:mm")}) [red](deleted)[/]");
+            .UseConverter(entry => $"Id: {entry.Id} {Markup.Escape(entry.Task)} ({entry.StartTime:yyyy-MM-dd HH:mm} - {entry.EndTime.ToString("yyyy-MM-dd HH:mm")}) [{_theme.DeletedMarkup}](deleted)[/]");
 
         entryPrompt.CancelResult = () => TimeEntry.GetEmpty(); // this will return an empty (invalid) entry to check against
 
