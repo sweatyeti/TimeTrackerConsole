@@ -5,8 +5,8 @@ internal class Session
 {
     private Session() { }
 
-    // width of the Logged/Unlogged status column in the main-menu entry rows:
-    // the wider of the two labels, so "Logged" pads out to line up with "Unlogged"
+    // width of the Logged/Unlogged/N-A status column in the main-menu entry rows:
+    // the wider of the labels, so everything pads out to the same width
     private const int StatusColumnWidth = 8;
 
     private ConsoleTheme _theme = null!;
@@ -414,13 +414,15 @@ internal class Session
             .DefaultIfEmpty(0)
             .Max();
 
-        // status text: In Progress / Logged / Unlogged (the logged/unlogged
-        // marker is only shown for completed entries with a real task)
-        string loggedText = entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase)
-            ? string.Empty
-            : entry.IsComplete
-                ? entry.Logged ? "Logged" : "Unlogged"
-                : string.Empty;
+        // status column: Logged / Unlogged for completed real tasks, N/A otherwise
+        // (in-progress entries and "none"-task entries have no logged/unlogged state).
+        // The column is always emitted and padded to a fixed width so the description
+        // lines up on every row; markup wraps after the pad so tags stay zero-width.
+        bool hasStatus = entry.IsComplete && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
+        string statusText = hasStatus ? (entry.Logged ? "Logged" : "Unlogged") : "N/A";
+        string statusColor = hasStatus
+            ? (entry.Logged ? _theme.PositiveMarkup : _theme.InactiveColor.ToMarkup())
+            : _theme.MutedMarkup;
 
         string idPart = $"#{entry.Id}".PadRight(idWidth + 1);
         string taskPart = Markup.Escape(entry.Task).PadRight(taskWidth);
@@ -430,17 +432,7 @@ internal class Session
         string timeText = $"{entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "In Progress")}".PadRight(timeWidth);
         string timePart = entry.IsComplete ? timeText : $"[{_theme.InProgressMarkup}]{timeText}[/]";
 
-        string row = $"[{_theme.SecondaryMarkup}]{idPart} | {taskPart} | {timePart}";
-        if(loggedText.Length > 0)
-        {
-            // pad the PLAIN status text (same trick as the time column) so "Logged"
-            // lines up with the wider "Unlogged" and the description column stays
-            // aligned; markup tags are zero-width, so they wrap after the pad
-            string statusText = loggedText.PadRight(StatusColumnWidth);
-            string statusColor = entry.Logged ? _theme.PositiveMarkup : _theme.InactiveColor.ToMarkup();
-            row += $" | [{statusColor}]{statusText}[/]";
-        }
-        row += $" | {(string.IsNullOrEmpty(entry.Description) ? $"[{_theme.MutedMarkup}]No description[/]" : Markup.Escape(entry.Description))}[/]";
+        string row = $"[{_theme.SecondaryMarkup}]{idPart} | {taskPart} | {timePart} | [{statusColor}]{statusText.PadRight(StatusColumnWidth)}[/] | {(string.IsNullOrEmpty(entry.Description) ? $"[{_theme.MutedMarkup}]No description[/]" : Markup.Escape(entry.Description))}[/]";
 
         return row;
     }
