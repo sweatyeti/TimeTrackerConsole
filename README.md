@@ -8,6 +8,10 @@ C# .NET 10 console app for tracking time on tasks. Uses Spectre.Console + System
 git clone https://github.com/sweatyeti/TimeTrackerConsole.git
 cd TimeTrackerConsole
 dotnet run -- new
+
+# Alternate presentation theme
+dotnet run -- new --theme anime
+dotnet run -- continue --theme anime
 ```
 
 ## Commands
@@ -23,6 +27,11 @@ dotnet run -- new
 |------|-------------|
 | `--name <value>` | Optional session name |
 | `--page-size <n>` | Number of menu items shown before paging (default: 30) |
+| `--theme <current\|anime\|anime-light>` | Presentation theme (default: `current`; accepted case-insensitively) |
+
+`current` preserves the existing palette. `anime` is an original whimsical pastoral-fantasy palette (vivid spring green, sky blue, gold, khaki and berry roles) on a dark pine ground; `anime-light` is the same direction on a bright parchment ground. Both anime themes tint the terminal's *default* background for the duration of the session and restore it on exit; `anime-light` also sets the default foreground, since its ground is light. Theme selection affects presentation only and is not stored in session files.
+
+The tinting uses `OSC 11`/`OSC 10` to set and `OSC 111`/`OSC 110` to reset the terminal's default colours, which xterm-style terminals, tmux (3.1+), Windows Terminal, iTerm2, VTE, Kitty, WezTerm, and Alacritty understand; terminals that don't simply ignore it, and it is never emitted when output is redirected. `current` leaves the terminal's own colours alone.
 
 ## Menu
 
@@ -73,10 +82,12 @@ Sessions are written to `entries/` as JSON — one file per session — by a bac
 ## Project Structure
 
 ```
-Program.cs       — CLI entry point (System.CommandLine; `new` + `continue` commands); final store flush on exit
-Session.cs       — Main loop, menus, entry CRUD, summary (Spectre.Console)
-EntryStore.cs    — On-disk store: 5s periodic flush, dirty flag, atomic writes
-TimeEntry.cs     — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete, IsDeleted)
+Program.cs         — CLI entry point (System.CommandLine; `new` + `continue` commands); final store flush on exit
+Session.cs         — Main loop, menus, entry CRUD, summary (Spectre.Console)
+ConsoleTheme.cs    — Presentation theme role tables (`current`, `anime`, `anime-light`)
+ConsoleBackdrop.cs — Applies/restores the theme's terminal default colours (OSC 10/11)
+EntryStore.cs      — On-disk store: 5s periodic flush, dirty flag, atomic writes
+TimeEntry.cs       — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete, IsDeleted)
 ```
 
 ## Design Note
