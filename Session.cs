@@ -239,14 +239,37 @@ internal class Session
     {
         string label = IsActive ? "ACTIVE" : "NOT ACTIVE";
         Color color = IsActive ? _theme.ActiveColor : _theme.InactiveColor;
-        string centeredLabel = label.PadLeft((13 + label.Length) / 2).PadRight(13);
+        string art = BuildActiveStateArt(label);
 
-        Panel banner = new Panel(new Markup($"[{color.ToMarkup()}]{Markup.Escape(centeredLabel)}[/]"))
-            .Padding(0, 0)
+        Panel banner = new Panel(new Markup($"[{color.ToMarkup()}]{art}[/]"))
+            .Padding(1, 0)
             .BorderColor(color);
 
         AnsiConsole.Write(banner);
         AnsiConsole.WriteLine();
+    }
+
+    private static string BuildActiveStateArt(string label)
+    {
+        Dictionary<char, string[]> font = new()
+        {
+            ['A'] = new[] { " ### ", "#   #", "#####", "#   #", "#   #" },
+            ['C'] = new[] { " ####", "#", "#", "#", " ####" },
+            ['E'] = new[] { "#####", "#", "####", "#", "#####" },
+            ['I'] = new[] { "#####", "  #", "  #", "  #", "#####" },
+            ['N'] = new[] { "#   #", "##  #", "# # #", "#  ##", "#   #" },
+            ['O'] = new[] { " ### ", "#   #", "#   #", "#   #", " ### " },
+            ['T'] = new[] { "#####", "  #", "  #", "  #", "  #" },
+            ['V'] = new[] { "#   #", "#   #", "#   #", " # #", "  #" }
+        };
+
+        string[] words = label.Split(' ');
+        string[] rows = Enumerable.Range(0, 5)
+            .Select(row => string.Join("   ", words.Select(word =>
+                string.Join(" ", word.Select(letter => font[letter][row].PadRight(5))))).TrimEnd())
+            .ToArray();
+        int width = rows.Max(row => row.Length);
+        return string.Join(Environment.NewLine, rows.Select(row => row.PadRight(width)));
     }
 
     // prints e.g. "Total unlogged task time: 01:15   Total time: 02:40" as its own line
