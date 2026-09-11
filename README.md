@@ -33,6 +33,20 @@ dotnet run -- continue --theme anime
 
 The tinting uses `OSC 11`/`OSC 10` to set and `OSC 111`/`OSC 110` to reset the terminal's default colours, which xterm-style terminals, tmux (3.1+), Windows Terminal, iTerm2, VTE, Kitty, WezTerm, and Alacritty understand; terminals that don't simply ignore it, and it is never emitted when output is redirected. `current` leaves the terminal's own colours alone.
 
+## Themes
+
+`--theme current` (default)
+
+![TimeTrackerConsole with the current theme](docs/screenshots/theme-current.png)
+
+`--theme anime`
+
+![TimeTrackerConsole with the anime theme](docs/screenshots/theme-anime.png)
+
+`--theme anime-light`
+
+![TimeTrackerConsole with the anime-light theme](docs/screenshots/theme-anime-light.png)
+
 ## Menu
 
 Single combined menu: summary table (task groups with counts/time) + admin/entry selector. In-progress entries highlighted green. A task's unlogged time is highlighted red in the summary. Logged/unlogged status shown.
@@ -82,10 +96,12 @@ Sessions are written to `entries/` as JSON — one file per session — by a bac
 ## Project Structure
 
 ```
-Program.cs       — CLI entry point (System.CommandLine; `new` + `continue` commands); final store flush on exit
-Session.cs       — Main loop, menus, entry CRUD, summary (Spectre.Console)
-EntryStore.cs    — On-disk store: 5s periodic flush, dirty flag, atomic writes
-TimeEntry.cs     — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete, IsDeleted)
+Program.cs         — CLI entry point (System.CommandLine; `new` + `continue` commands); final store flush on exit
+Session.cs         — Main loop, menus, entry CRUD, summary (Spectre.Console)
+ConsoleTheme.cs    — Presentation theme role tables (`current`, `anime`, `anime-light`)
+ConsoleBackdrop.cs — Applies/restores the theme's terminal default colours (OSC 10/11)
+EntryStore.cs      — On-disk store: 5s periodic flush, dirty flag, atomic writes
+TimeEntry.cs       — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete, IsDeleted)
 ```
 
 ## Design Note
