@@ -27,11 +27,11 @@ dotnet run -- continue --theme anime
 |------|-------------|
 | `--name <value>` | Optional session name |
 | `--page-size <n>` | Number of menu items shown before paging (default: 30) |
-| `--theme <current\|anime>` | Presentation theme (default: `current`; accepted case-insensitively) |
+| `--theme <current\|anime\|anime-light>` | Presentation theme (default: `current`; accepted case-insensitively) |
 
-`current` preserves the existing palette. `anime` is an original whimsical pastoral-fantasy palette with forest, sky, cream, and berry accents, and also tints the terminal's *default* background with a deep pine green for the duration of the session (restored on exit). Theme selection affects presentation only and is not stored in session files.
+`current` preserves the existing palette. `anime` is an original whimsical pastoral-fantasy palette (vivid spring green, sky blue, gold, khaki and berry roles) on a dark pine ground; `anime-light` is the same direction on a bright parchment ground. Both anime themes tint the terminal's *default* background for the duration of the session and restore it on exit; `anime-light` also sets the default foreground, since its ground is light. Theme selection affects presentation only and is not stored in session files.
 
-The background tint uses `OSC 11`/`OSC 110`, which xterm-style terminals, tmux (3.1+), Windows Terminal, iTerm2, VTE, Kitty, WezTerm, and Alacritty understand; terminals that don't simply ignore it, and it is never emitted when output is redirected. `current` leaves the terminal's own background alone.
+The tinting uses `OSC 11`/`OSC 10` to set and `OSC 111`/`OSC 110` to reset the terminal's default colours, which xterm-style terminals, tmux (3.1+), Windows Terminal, iTerm2, VTE, Kitty, WezTerm, and Alacritty understand; terminals that don't simply ignore it, and it is never emitted when output is redirected. `current` leaves the terminal's own colours alone.
 
 ## Menu
 

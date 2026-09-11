@@ -19,7 +19,7 @@ newSubCommand.Options.Add(nameOption);
 
 Option<string> themeOption = new("--theme")
 {
-    Description = "Presentation theme: current (default) or anime."
+    Description = "Presentation theme: current (default), anime, or anime-light."
 };
 themeOption.DefaultValueFactory = _ => ConsoleTheme.DefaultThemeName;
 newSubCommand.Options.Add(themeOption);
@@ -46,7 +46,7 @@ continueSubCommand.Options.Add(continuePageSizeOption);
 
 Option<string> continueThemeOption = new("--theme")
 {
-    Description = "Presentation theme: current (default) or anime."
+    Description = "Presentation theme: current (default), anime, or anime-light."
 };
 continueThemeOption.DefaultValueFactory = _ => ConsoleTheme.DefaultThemeName;
 continueSubCommand.Options.Add(continueThemeOption);
