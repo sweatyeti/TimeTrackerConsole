@@ -29,7 +29,9 @@ dotnet run -- continue --theme anime
 | `--page-size <n>` | Number of menu items shown before paging (default: 30) |
 | `--theme <current\|anime>` | Presentation theme (default: `current`; accepted case-insensitively) |
 
-`current` preserves the existing palette. `anime` is an original whimsical pastoral-fantasy palette with forest, sky, cream, and berry accents. Theme selection affects presentation only and is not stored in session files.
+`current` preserves the existing palette. `anime` is an original whimsical pastoral-fantasy palette with forest, sky, cream, and berry accents, and also tints the terminal's *default* background with a deep pine green for the duration of the session (restored on exit). Theme selection affects presentation only and is not stored in session files.
+
+The background tint uses `OSC 11`/`OSC 110`, which xterm-style terminals, tmux (3.1+), Windows Terminal, iTerm2, VTE, Kitty, WezTerm, and Alacritty understand; terminals that don't simply ignore it, and it is never emitted when output is redirected. `current` leaves the terminal's own background alone.
 
 ## Menu
 

@@ -73,15 +73,25 @@ static int NewSession(string? name, int pageSize = 30, string? themeName = null)
         return 1;
     }
 
-    Session currentSession = Session.StartNew(name, pageSize, theme);
+    // tint the console before the session starts so even the first task prompt sits
+    // on it; Restore() runs on every exit path (graceful exit, Ctrl+C, exception)
+    ConsoleBackdrop.Apply(theme);
+    try
+    {
+        Session currentSession = Session.StartNew(name, pageSize, theme);
 
-    // call the main session loop that does all the work
-    currentSession.MainLoop();
+        // call the main session loop that does all the work
+        currentSession.MainLoop();
 
-    // the session ended gracefully (StopSession exit path) - stop the background
-    // flush loop and force one final write so the on-disk file is up to date,
-    // then let the process exit normally
-    currentSession.Shutdown();
+        // the session ended gracefully (StopSession exit path) - stop the background
+        // flush loop and force one final write so the on-disk file is up to date,
+        // then let the process exit normally
+        currentSession.Shutdown();
+    }
+    finally
+    {
+        ConsoleBackdrop.Restore();
+    }
 
     return 0;
 }
@@ -96,52 +106,63 @@ static int ContinueSession(int pageSize = 30, string? themeName = null)
     }
 
     List<(SessionSnapshot Snapshot, string FilePath)> sessions = EntryStore.ListAllSessions();
-    if(sessions.Count == 0)
+
+    // tint the console for the whole continue flow (list + resumed session); the
+    // finally block restores it on cancel, empty list, and any exit path
+    ConsoleBackdrop.Apply(theme);
+    try
     {
-        AnsiConsole.MarkupLine($"[{theme.ErrorMarkup}]No previous sessions found.[/]");
+        if(sessions.Count == 0)
+        {
+            AnsiConsole.MarkupLine($"[{theme.ErrorMarkup}]No previous sessions found.[/]");
+            return 0;
+        }
+
+        // display a table of available sessions
+        Table table = new Table()
+            .Title($"[{theme.HeadingMarkup}]Previous Sessions[/]")
+            .BorderColor(theme.DetailBorder);
+        table.AddColumn("#");
+        table.AddColumn("Name");
+        table.AddColumn("Started");
+        table.AddColumn("Ended");
+
+        for(int i = 0; i < sessions.Count; i++)
+        {
+            (SessionSnapshot snap, _) = sessions[i];
+            table.AddRow(
+                (i + 1).ToString(),
+                Markup.Escape(snap.Name ?? "Unnamed session"),
+                snap.StartedAt.ToString("yyyy-MM-dd HH:mm"),
+                snap.EndedAt is null ? $"[{theme.UnfinishedMarkup}]unfinished[/]" : snap.EndedAt.Value.ToString("yyyy-MM-dd HH:mm"));
+        }
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
+
+        // let the user pick a session to resume
+        SelectionPrompt<int> prompt = new SelectionPrompt<int>()
+            .Title("Select a session to resume (press ESC to cancel):")
+            .AddChoices(Enumerable.Range(1, sessions.Count))
+            .UseConverter(i =>
+            {
+                (SessionSnapshot snap, _) = sessions[i - 1];
+                string status = snap.EndedAt is null ? $" [{theme.UnfinishedMarkup}](unfinished)[/]" : string.Empty;
+                return $"{i}. {Markup.Escape(snap.Name ?? "Unnamed session")} - {snap.StartedAt:yyyy-MM-dd HH:mm}{status}";
+            });
+        prompt.CancelResult = () => 0;
+
+        int choice = prompt.Show(AnsiConsole.Console);
+        if(choice == 0) return 0;
+
+        (SessionSnapshot snapshot, string filePath) = sessions[choice - 1];
+        Session resumed = Session.Resume(snapshot, filePath, pageSize, theme);
+        resumed.MainLoop();
+        resumed.Shutdown();
+
         return 0;
     }
-
-    // display a table of available sessions
-    Table table = new Table()
-        .Title($"[{theme.HeadingMarkup}]Previous Sessions[/]")
-        .BorderColor(theme.DetailBorder);
-    table.AddColumn("#");
-    table.AddColumn("Name");
-    table.AddColumn("Started");
-    table.AddColumn("Ended");
-
-    for(int i = 0; i < sessions.Count; i++)
+    finally
     {
-        (SessionSnapshot snap, _) = sessions[i];
-        table.AddRow(
-            (i + 1).ToString(),
-            Markup.Escape(snap.Name ?? "Unnamed session"),
-            snap.StartedAt.ToString("yyyy-MM-dd HH:mm"),
-            snap.EndedAt is null ? $"[{theme.UnfinishedMarkup}]unfinished[/]" : snap.EndedAt.Value.ToString("yyyy-MM-dd HH:mm"));
+        ConsoleBackdrop.Restore();
     }
-    AnsiConsole.Write(table);
-    AnsiConsole.WriteLine();
-
-    // let the user pick a session to resume
-    SelectionPrompt<int> prompt = new SelectionPrompt<int>()
-        .Title("Select a session to resume (press ESC to cancel):")
-        .AddChoices(Enumerable.Range(1, sessions.Count))
-        .UseConverter(i =>
-        {
-            (SessionSnapshot snap, _) = sessions[i - 1];
-            string status = snap.EndedAt is null ? $" [{theme.UnfinishedMarkup}](unfinished)[/]" : string.Empty;
-            return $"{i}. {Markup.Escape(snap.Name ?? "Unnamed session")} - {snap.StartedAt:yyyy-MM-dd HH:mm}{status}";
-        });
-    prompt.CancelResult = () => 0;
-
-    int choice = prompt.Show(AnsiConsole.Console);
-    if(choice == 0) return 0;
-
-    (SessionSnapshot snapshot, string filePath) = sessions[choice - 1];
-    Session resumed = Session.Resume(snapshot, filePath, pageSize, theme);
-    resumed.MainLoop();
-    resumed.Shutdown();
-
-    return 0;
 }

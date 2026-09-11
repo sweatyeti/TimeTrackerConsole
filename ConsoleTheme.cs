@@ -22,7 +22,8 @@ internal sealed class ConsoleTheme
         string deletedMarkup,
         string unfinishedMarkup,
         string totalsMarkup,
-        string mutedMarkup)
+        string mutedMarkup,
+        Color? background)
     {
         Name = name;
         DetailBorder = detailBorder;
@@ -40,6 +41,7 @@ internal sealed class ConsoleTheme
         UnfinishedMarkup = unfinishedMarkup;
         TotalsMarkup = totalsMarkup;
         MutedMarkup = mutedMarkup;
+        Background = background;
     }
 
     public string Name { get; }
@@ -65,6 +67,10 @@ internal sealed class ConsoleTheme
     // kept separate so the "current" theme still renders it gray)
     public string MutedMarkup { get; }
 
+    // console backdrop colour, applied as the terminal's default background for the
+    // duration of the session (null = leave the user's terminal background alone)
+    public Color? Background { get; }
+
     // non-throwing lookup. null/blank => default theme, names are case-insensitive,
     // anything else returns false so callers can report a concise CLI error
     // instead of letting an exception escape.
@@ -75,14 +81,16 @@ internal sealed class ConsoleTheme
         if(selected.Equals("current", StringComparison.OrdinalIgnoreCase))
         {
             theme = new ConsoleTheme("current", Color.DarkOrange, Color.Blue, Color.Green, Color.Red,
-                "cyan bold", "orange1 bold", "Chartreuse2", "CadetBlue", "red bold", "green", "blue bold", "red", "blue", "bold", "gray");
+                "cyan bold", "orange1 bold", "Chartreuse2", "CadetBlue", "red bold", "green", "blue bold", "red", "blue", "bold", "gray", null);
             return true;
         }
 
         if(selected.Equals("anime", StringComparison.OrdinalIgnoreCase))
         {
+            // deep pine backdrop so the gold/khaki/sky/teal roles sit on their own ground
             theme = new ConsoleTheme("anime", Color.Teal, Color.SkyBlue1, Color.Green3, Color.IndianRed,
-                "gold1 bold", "gold1 bold", "khaki1", "skyblue1", "indianred1 bold", "green3", "skyblue1 bold", "indianred1", "skyblue1", "gold1 bold", "skyblue1");
+                "gold1 bold", "gold1 bold", "khaki1", "skyblue1", "indianred1 bold", "green3", "skyblue1 bold", "indianred1", "skyblue1", "gold1 bold", "skyblue1",
+                new Color(0x10, 0x1d, 0x16));
             return true;
         }
 
