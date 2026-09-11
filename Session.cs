@@ -5,6 +5,10 @@ internal class Session
 {
     private Session() { }
 
+    // width of the Logged/Unlogged status column in the main-menu entry rows:
+    // the wider of the two labels, so "Logged" pads out to line up with "Unlogged"
+    private const int StatusColumnWidth = 8;
+
     private ConsoleTheme _theme = null!;
 
     private readonly Dictionary<int, TimeEntry> _timeEntries = new();
@@ -406,7 +410,12 @@ internal class Session
         string row = $"[{_theme.SecondaryMarkup}]{idPart} | {taskPart} | {timePart}";
         if(loggedText.Length > 0)
         {
-            row += $" | {(entry.Logged ? $"[{_theme.PositiveMarkup}]Logged[/]" : $"[{_theme.InactiveColor.ToMarkup()}]Unlogged[/]")}";
+            // pad the PLAIN status text (same trick as the time column) so "Logged"
+            // lines up with the wider "Unlogged" and the description column stays
+            // aligned; markup tags are zero-width, so they wrap after the pad
+            string statusText = loggedText.PadRight(StatusColumnWidth);
+            string statusColor = entry.Logged ? _theme.PositiveMarkup : _theme.InactiveColor.ToMarkup();
+            row += $" | [{statusColor}]{statusText}[/]";
         }
         row += $" | {(string.IsNullOrEmpty(entry.Description) ? $"[{_theme.MutedMarkup}]No description[/]" : Markup.Escape(entry.Description))}[/]";
 
