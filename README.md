@@ -33,20 +33,6 @@ dotnet run -- continue --theme anime
 
 The tinting uses `OSC 11`/`OSC 10` to set and `OSC 111`/`OSC 110` to reset the terminal's default colours, which xterm-style terminals, tmux (3.1+), Windows Terminal, iTerm2, VTE, Kitty, WezTerm, and Alacritty understand; terminals that don't simply ignore it, and it is never emitted when output is redirected. `current` leaves the terminal's own colours alone.
 
-## Themes
-
-`--theme current` (default)
-
-![TimeTrackerConsole with the current theme](docs/screenshots/theme-current.png)
-
-`--theme anime`
-
-![TimeTrackerConsole with the anime theme](docs/screenshots/theme-anime.png)
-
-`--theme anime-light`
-
-![TimeTrackerConsole with the anime-light theme](docs/screenshots/theme-anime-light.png)
-
 ## Menu
 
 Single combined menu: summary table (task groups with counts/time) + admin/entry selector. In-progress entries highlighted green. A task's unlogged time is highlighted red in the summary. Logged/unlogged status shown.
