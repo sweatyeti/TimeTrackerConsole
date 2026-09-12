@@ -47,6 +47,11 @@ CodeCoverage/
 # entry backup files
 *.bak
 
+# Session data - runtime output, never repo content. EntryStore writes one JSON
+# file per session (entries/<slug>.json) plus a transient entries/<slug>.json.tmp
+# during the atomic rename, so the whole directory is ignored.
+entries/
+
 # MSBuild Binary and Structured Log
 *.binlog
 
