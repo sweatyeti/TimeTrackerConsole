@@ -52,6 +52,9 @@ CodeCoverage/
 # during the atomic rename, so the whole directory is ignored.
 entries/
 
+# Language server cache files - regenerated locally by the tooling, never repo content
+*.lscache
+
 # MSBuild Binary and Structured Log
 *.binlog
 
