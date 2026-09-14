@@ -180,7 +180,9 @@ internal sealed class TuiSessionWindow
         }
 
         bool isActive = _session.IsActive;
-        string art = Session.BuildActiveStateArt(isActive ? "ACTIVE" : "NOT ACTIVE");
+        // a wider letter/word gap than the Spectre art, so the banner reads as a banner in a
+        // full-width window rather than a narrow strip pinned to the left
+        string art = Session.BuildActiveStateArt(isActive ? "ACTIVE" : "NOT ACTIVE", letterGap: 3, wordGap: 5);
 
         Label banner = new()
         {
@@ -189,6 +191,7 @@ internal sealed class TuiSessionWindow
             Width = Dim.Fill(),
             Height = ArtHeightInLines(art),
             Text = art,
+            TextAlignment = Alignment.Center,
             SchemeName = isActive ? _schemes.BannerActiveName : _schemes.BannerInactiveName
         };
         _window.Add(banner);
@@ -215,7 +218,7 @@ internal sealed class TuiSessionWindow
             TableView summary = new()
             {
                 X = 0,
-                Y = Pos.Bottom(previous),
+                Y = Pos.Bottom(previous) + 1,
                 Width = Dim.Fill(),
                 Height = summaryStyle.ShowHeaders
                     ? summarySource.Rows + 3 // header row + header rule + bottom line
@@ -230,7 +233,7 @@ internal sealed class TuiSessionWindow
             Label totals = new()
             {
                 X = 0,
-                Y = Pos.Bottom(previous),
+                Y = Pos.Bottom(previous) + 1,
                 Width = Dim.Fill(),
                 Height = 1,
                 Text = $"Total unlogged task time: {FormatMinutes(summarySource.TotalUnloggedMins)}    Total time: {FormatMinutes(summarySource.TotalTotalMins)}",
@@ -245,7 +248,7 @@ internal sealed class TuiSessionWindow
         ListView entries = new()
         {
             X = 0,
-            Y = Pos.Bottom(previous),
+            Y = Pos.Bottom(previous) + 1,
             Width = Dim.Fill(),
             Height = Dim.Fill(1),
             Source = entrySource,
