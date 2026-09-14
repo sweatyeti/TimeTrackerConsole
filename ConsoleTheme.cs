@@ -24,7 +24,8 @@ internal sealed class ConsoleTheme
         string totalsMarkup,
         string mutedMarkup,
         Color? background,
-        Color? foreground)
+        Color? foreground,
+        TuiPalette? tui = null)
     {
         Name = name;
         DetailBorder = detailBorder;
@@ -44,6 +45,7 @@ internal sealed class ConsoleTheme
         MutedMarkup = mutedMarkup;
         Background = background;
         Foreground = foreground;
+        Tui = tui;
     }
 
     public string Name { get; }
@@ -76,6 +78,13 @@ internal sealed class ConsoleTheme
     public Color? Background { get; }
     public Color? Foreground { get; }
 
+    // TUI-only colours, used by the Terminal.Gui path when present and ignored entirely by the
+    // Spectre path. Those two are different rendering surfaces - Terminal.Gui paints filled
+    // cells and native schemes, while the Spectre path colours markup on the terminal's own
+    // ground - so they can legitimately want different palettes for the same theme name. Null
+    // means "derive from the fields above", which is what every theme did before this existed.
+    public TuiPalette? Tui { get; }
+
     // non-throwing lookup. null/blank => default theme, names are case-insensitive,
     // anything else returns false so callers can report a concise CLI error
     // instead of letting an exception escape.
@@ -87,7 +96,26 @@ internal sealed class ConsoleTheme
         {
             theme = new ConsoleTheme("current", Color.DarkOrange, Color.Blue, Color.Green, Color.Red,
                 "cyan bold", "orange1 bold", "Chartreuse2", "CadetBlue", "red bold", "green", "blue bold", "red", "blue", "bold", "gray",
-                null, null);
+                null, null,
+                // The Terminal.Gui path's default palette. The Spectre palette above is vivid on
+                // the user's own black ground; on a surface that paints filled cells the same
+                // colours read as harsh - pure cyan headings, pure white on pure black, and a
+                // pure-blue "In Progress" that is barely legible there. This is the same warm
+                // charcoal ground and sand/amber accent set, muted throughout.
+                tui: new TuiPalette(
+                    ActiveColor: new Color(0x9d, 0xae, 0x74),
+                    InactiveColor: new Color(0xbf, 0x7f, 0x6f),
+                    HeadingMarkup: "#d8b978 bold",
+                    PromptMarkup: "#e0a45f bold",
+                    AccentMarkup: "#b9b06a",
+                    SecondaryMarkup: "#a2988a",
+                    ErrorMarkup: "#cf7a63 bold",
+                    PositiveMarkup: "#9dae74",
+                    InProgressMarkup: "#b09ac0 bold",
+                    TotalsMarkup: "bold",
+                    MutedMarkup: "#857c70",
+                    Background: new Color(0x21, 0x1f, 0x1c),
+                    Foreground: new Color(0xdd, 0xd5, 0xc8)));
             return true;
         }
 
@@ -123,3 +151,25 @@ internal sealed class ConsoleTheme
         throw new ArgumentException($"Unknown theme '{name}'. Valid themes: {ValidThemeList}.", nameof(name));
     }
 }
+
+// Palette for the Terminal.Gui path only. A theme can carry one of these when the TUI wants
+// colours the Spectre path does not; every field mirrors a ConsoleTheme field of the same name,
+// and TuiSchemes falls back to the ConsoleTheme value for anything left unset.
+//
+// Deliberately NOT every ConsoleTheme field: DetailBorder, SummaryBorder, DeletedMarkup and
+// UnfinishedMarkup have no Terminal.Gui consumer, so carrying TUI copies of them would create
+// values nobody reads and nobody can check.
+internal sealed record TuiPalette(
+    Color ActiveColor,
+    Color InactiveColor,
+    string HeadingMarkup,
+    string PromptMarkup,
+    string AccentMarkup,
+    string SecondaryMarkup,
+    string ErrorMarkup,
+    string PositiveMarkup,
+    string InProgressMarkup,
+    string TotalsMarkup,
+    string MutedMarkup,
+    Color Background,
+    Color Foreground);
