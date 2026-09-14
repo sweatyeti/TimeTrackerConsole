@@ -11,8 +11,14 @@ using Attribute = Terminal.Gui.Drawing.Attribute;
 // This replaces Phase 1's TuiPalette stopgap. The roles are still read from ConsoleTheme - the
 // same table the Spectre path renders from, so a theme change is a data change in one file - but
 // they are now built into named Scheme objects that are registered with SchemeManager and
-// assigned to views through View.SchemeName. No view carries an inline colour, and no second
-// palette exists to drift out of sync with ConsoleTheme.
+// assigned to views through View.SchemeName. No view carries an inline colour.
+//
+// One exception, added deliberately: a theme may also carry a TuiPalette (see ConsoleTheme.cs)
+// whose roles take precedence here. The two paths are different rendering surfaces and can
+// legitimately want different colours under one theme name - that is why the TUI's default
+// palette is a warm charcoal while the Spectre path keeps the vivid one. Every theme except
+// "current" carries no TuiPalette, so for them nothing changed: the roles come from ConsoleTheme
+// exactly as described above.
 //
 // Mapping (migration plan section 6):
 //   HeadingMarkup   -> HotNormal            (and the summary header scheme)
@@ -47,28 +53,40 @@ internal sealed class TuiSchemes
     {
         ThemeName = theme.Name;
 
+        // A theme may carry a TUI-only palette (see TuiPalette). Every role below prefers it and
+        // falls back to the ConsoleTheme field, which is what the Spectre path still renders.
+        TuiPalette? tui = theme.Tui;
+
         // the terminal's own defaults when the theme does not pin a background
-        // (the "current" theme leaves the console colours alone)
         Color defaultForeground = Attribute.Default.Foreground;
         Color defaultBackground = Attribute.Default.Background;
 
-        Color background = theme.Background is { } bg ? ToGui(bg) : defaultBackground;
-        Color foreground = theme.Foreground is { } fg ? ToGui(fg) : defaultForeground;
+        Color background = (tui?.Background ?? theme.Background) is { } bg ? ToGui(bg) : defaultBackground;
+        Color foreground = (tui?.Foreground ?? theme.Foreground) is { } fg ? ToGui(fg) : defaultForeground;
 
         Plain = new Attribute(foreground, background);
         Background = background;
 
-        Active = ToGui(theme.ActiveColor);
-        Inactive = ToGui(theme.InactiveColor);
+        Active = ToGui(tui?.ActiveColor ?? theme.ActiveColor);
+        Inactive = ToGui(tui?.InactiveColor ?? theme.InactiveColor);
 
-        Heading = new Attribute(ResolveMarkupColor(theme.HeadingMarkup, foreground), background, TextStyleFor(theme.HeadingMarkup));
-        Totals = new Attribute(ResolveMarkupColor(theme.TotalsMarkup, foreground), background, TextStyleFor(theme.TotalsMarkup));
-        Accent = new Attribute(ResolveMarkupColor(theme.AccentMarkup, foreground), background, TextStyleFor(theme.AccentMarkup));
-        Secondary = new Attribute(ResolveMarkupColor(theme.SecondaryMarkup, foreground), background, TextStyleFor(theme.SecondaryMarkup));
-        Muted = new Attribute(ResolveMarkupColor(theme.MutedMarkup, foreground), background, TextStyleFor(theme.MutedMarkup));
-        Positive = new Attribute(ResolveMarkupColor(theme.PositiveMarkup, foreground), background, TextStyleFor(theme.PositiveMarkup));
-        InProgress = new Attribute(ResolveMarkupColor(theme.InProgressMarkup, foreground), background, TextStyleFor(theme.InProgressMarkup));
-        Prompt = new Attribute(ResolveMarkupColor(theme.PromptMarkup, foreground), background, TextStyleFor(theme.PromptMarkup));
+        string headingMarkup = tui?.HeadingMarkup ?? theme.HeadingMarkup;
+        string totalsMarkup = tui?.TotalsMarkup ?? theme.TotalsMarkup;
+        string accentMarkup = tui?.AccentMarkup ?? theme.AccentMarkup;
+        string secondaryMarkup = tui?.SecondaryMarkup ?? theme.SecondaryMarkup;
+        string mutedMarkup = tui?.MutedMarkup ?? theme.MutedMarkup;
+        string positiveMarkup = tui?.PositiveMarkup ?? theme.PositiveMarkup;
+        string inProgressMarkup = tui?.InProgressMarkup ?? theme.InProgressMarkup;
+        string promptMarkup = tui?.PromptMarkup ?? theme.PromptMarkup;
+
+        Heading = new Attribute(ResolveMarkupColor(headingMarkup, foreground), background, TextStyleFor(headingMarkup));
+        Totals = new Attribute(ResolveMarkupColor(totalsMarkup, foreground), background, TextStyleFor(totalsMarkup));
+        Accent = new Attribute(ResolveMarkupColor(accentMarkup, foreground), background, TextStyleFor(accentMarkup));
+        Secondary = new Attribute(ResolveMarkupColor(secondaryMarkup, foreground), background, TextStyleFor(secondaryMarkup));
+        Muted = new Attribute(ResolveMarkupColor(mutedMarkup, foreground), background, TextStyleFor(mutedMarkup));
+        Positive = new Attribute(ResolveMarkupColor(positiveMarkup, foreground), background, TextStyleFor(positiveMarkup));
+        InProgress = new Attribute(ResolveMarkupColor(inProgressMarkup, foreground), background, TextStyleFor(inProgressMarkup));
+        Prompt = new Attribute(ResolveMarkupColor(promptMarkup, foreground), background, TextStyleFor(promptMarkup));
 
         // the summary's "unlogged minutes" emphasis and the ACTIVE banner use the theme's
         // inactive/active colours, exactly as the Spectre path does
