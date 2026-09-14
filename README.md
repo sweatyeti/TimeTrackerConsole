@@ -1,6 +1,6 @@
 # TimeTrackerConsole
 
-C# .NET 10 console app for tracking time on tasks. Uses Spectre.Console + System.CommandLine.
+C# .NET 10 console app for tracking time on tasks. Uses Spectre.Console + System.CommandLine, with an opt-in Terminal.Gui interface (`--tui`).
 
 ## Quickstart
 
@@ -12,7 +12,17 @@ dotnet run -- new
 # Alternate presentation theme
 dotnet run -- new --theme anime
 dotnet run -- continue --theme anime
+
+# Terminal.Gui interface (opt-in)
+dotnet run -- new --tui
+dotnet run -- continue --tui
 ```
+
+## Interfaces
+
+`Spectre.Console` renders the UI by default. `--tui` (accepted by both `new` and `continue`) selects an opt-in `Terminal.Gui` interface instead: same menu actions, same prompts-then-act order, same guards, and the same `entries/*.json` session files — only the rendering and the prompt widgets differ. It is a flag, not a value; omitting it leaves the default interface exactly as it was.
+
+Themes apply to both interfaces from the same role table. One presentation difference: the default interface tints the terminal's *default* background for the anime themes (see below), while the Terminal.Gui interface colours its own views and leaves the terminal's default colours untouched, so the tint covers the area the app draws on.
 
 ## Commands
 
@@ -28,14 +38,17 @@ dotnet run -- continue --theme anime
 | `--name <value>` | Optional session name |
 | `--page-size <n>` | Number of menu items shown before paging (default: 30) |
 | `--theme <current\|anime\|anime-light>` | Presentation theme (default: `current`; accepted case-insensitively) |
+| `--tui` | Use the opt-in Terminal.Gui interface instead of the default Spectre.Console one |
 
-`current` preserves the existing palette. `anime` is an original whimsical pastoral-fantasy palette (vivid spring green, sky blue, gold, khaki and berry roles) on a dark pine ground; `anime-light` is the same direction on a bright parchment ground. Both anime themes tint the terminal's *default* background for the duration of the session and restore it on exit; `anime-light` also sets the default foreground, since its ground is light. Theme selection affects presentation only and is not stored in session files.
+`current` preserves the existing palette. `anime` is an original whimsical pastoral-fantasy palette (vivid spring green, sky blue, gold, khaki and berry roles) on a dark pine ground; `anime-light` is the same direction on a bright parchment ground. On the default interface both anime themes tint the terminal's *default* background for the duration of the session and restore it on exit; `anime-light` also sets the default foreground, since its ground is light. Theme selection affects presentation only and is not stored in session files.
 
-The tinting uses `OSC 11`/`OSC 10` to set and `OSC 111`/`OSC 110` to reset the terminal's default colours, which xterm-style terminals, tmux (3.1+), Windows Terminal, iTerm2, VTE, Kitty, WezTerm, and Alacritty understand; terminals that don't simply ignore it, and it is never emitted when output is redirected. `current` leaves the terminal's own colours alone.
+On the default interface the tinting uses `OSC 11`/`OSC 10` to set and `OSC 111`/`OSC 110` to reset the terminal's default colours, which xterm-style terminals, tmux (3.1+), Windows Terminal, iTerm2, VTE, Kitty, WezTerm, and Alacritty understand; terminals that don't simply ignore it, and it is never emitted when output is redirected. `current` leaves the terminal's own colours alone. The Terminal.Gui interface emits no OSC sequences at all — it colours its views and restores the screen when it exits.
 
 ## Menu
 
 Single combined menu: summary table (task groups with counts/time) + admin/entry selector. In-progress entries highlighted green. A task's unlogged time is highlighted red in the summary. Logged/unlogged status shown.
+
+The Terminal.Gui interface renders the same banner, summary, totals and entry list; its admin options are function keys F2–F6 with the same order and behavior as the console menu, and Esc quits.
 
 ## Actions
 
@@ -85,9 +98,10 @@ Sessions are written to `entries/` as JSON — one file per session — by a bac
 Program.cs         — CLI entry point (System.CommandLine; `new` + `continue` commands); final store flush on exit
 Session.cs         — Main loop, menus, entry CRUD, summary (Spectre.Console)
 ConsoleTheme.cs    — Presentation theme role tables (`current`, `anime`, `anime-light`)
-ConsoleBackdrop.cs — Applies/restores the theme's terminal default colours (OSC 10/11)
+ConsoleBackdrop.cs — Applies/restores the theme's terminal default colours (OSC 10/11); default interface only
 EntryStore.cs      — On-disk store: 5s periodic flush, dirty flag, atomic writes
 TimeEntry.cs       — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete, IsDeleted)
+Tui/               — Opt-in Terminal.Gui interface (`--tui`): window, layout, themed schemes, entry list, dialogs
 ```
 
 ## Design Note

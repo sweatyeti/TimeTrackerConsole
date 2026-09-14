@@ -16,13 +16,17 @@ using Terminal.Gui.Views;
 // task group, stop tracking, stop and exit) runs through the same Session transitions as
 // the Spectre path - only the prompts differ (dialogs instead of Spectre prompts).
 //
+// Phase 3: every colour comes from TuiSchemes, which registers the ConsoleTheme roles as named
+// schemes with SchemeManager and hands each view its scheme through View.SchemeName. No view
+// carries an inline colour, and the TUI still reads the same role table the Spectre path does.
+//
 // Terminal.Gui owns the screen here: ConsoleBackdrop is deliberately never applied from this
 // path, and the screen is restored by Terminal.Gui before the final flush runs.
 internal sealed class TuiSessionWindow
 {
     private readonly IApplication _app;
     private readonly Session _session;
-    private readonly TuiPalette _palette;
+    private readonly TuiSchemes _schemes;
 
     private Window? _window;
     private int _selectedEntryId = -1;
@@ -32,7 +36,7 @@ internal sealed class TuiSessionWindow
     {
         _app = app;
         _session = session;
-        _palette = new TuiPalette(session.Theme);
+        _schemes = new TuiSchemes(session.Theme);
     }
 
     // `new --tui`: creates a real, writable session (EntryStore + background flush) and opens
@@ -47,9 +51,9 @@ internal sealed class TuiSessionWindow
 
         try
         {
-            TuiPalette palette = new(session.Theme);
+            TuiSchemes schemes = new(session.Theme);
             string? firstTask = EntryDialogs.PromptForText(
-                app, palette, "New entry", "Entry started, enter a task if desired:", string.Empty);
+                app, schemes, "New entry", "Entry started, enter a task if desired:", string.Empty);
 
             // Esc on the first prompt has no Spectre equivalent (its prompt cannot be
             // cancelled), so it falls back to the same "none" task an empty answer gives
@@ -82,9 +86,9 @@ internal sealed class TuiSessionWindow
             return 0;
         }
 
-        TuiPalette palette = new(theme);
+        TuiSchemes schemes = new(theme);
         int? choice = EntryDialogs.SelectFromList(
-            app, palette, "Continue", "Select a session to resume (press ESC to cancel):", SessionLabels(sessions));
+            app, schemes, "Continue", "Select a session to resume (press ESC to cancel):", SessionLabels(sessions));
 
         if(choice is null) return 0;
 
@@ -124,9 +128,9 @@ internal sealed class TuiSessionWindow
         {
             Title = $"TimeTracker - {_session.Name}",
             Width = Dim.Fill(),
-            Height = Dim.Fill()
+            Height = Dim.Fill(),
+            SchemeName = _schemes.BaseName
         };
-        window.SetScheme(_palette.BaseScheme);
         _window = window;
 
         // F2..F6 are the admin options of the Spectre main menu, in the same order and with the
@@ -144,9 +148,9 @@ internal sealed class TuiSessionWindow
         {
             X = 0,
             Y = Pos.AnchorEnd(1),
-            Width = Dim.Fill()
+            Width = Dim.Fill(),
+            SchemeName = _schemes.BaseName
         };
-        statusBar.SetScheme(_palette.BaseScheme);
 
         // the status bar is part of the rebuilt body, so it is added by BuildBody
         _statusBar = statusBar;
@@ -184,9 +188,9 @@ internal sealed class TuiSessionWindow
             Y = 0,
             Width = Dim.Fill(),
             Height = ArtHeightInLines(art),
-            Text = art
+            Text = art,
+            SchemeName = isActive ? _schemes.BannerActiveName : _schemes.BannerInactiveName
         };
-        banner.SetScheme(new Scheme(isActive ? _palette.BannerActive : _palette.BannerInactive));
         _window.Add(banner);
 
         View previous = banner;
@@ -194,7 +198,7 @@ internal sealed class TuiSessionWindow
         // the Spectre path skips the whole summary section when there are no entries
         if(_session.EntryCount > 0)
         {
-            SummaryTableSource summarySource = new(_session.VisibleEntriesOldestFirst, _palette);
+            SummaryTableSource summarySource = new(_session.VisibleEntriesOldestFirst, _schemes);
 
             TableStyle summaryStyle = new()
             {
@@ -204,7 +208,7 @@ internal sealed class TuiSessionWindow
                 ShowHorizontalBottomLine = true,
                 ShowVerticalCellLines = true,
                 ExpandLastColumn = false,
-                HeaderScheme = new Scheme(_palette.Heading),
+                HeaderScheme = _schemes.SummaryHeaderScheme,
                 RowColorGetter = summarySource.RowColorGetter
             };
 
@@ -217,9 +221,9 @@ internal sealed class TuiSessionWindow
                     ? summarySource.Rows + 3 // header row + header rule + bottom line
                     : summarySource.Rows + 1,
                 Table = summarySource,
-                Style = summaryStyle
+                Style = summaryStyle,
+                SchemeName = _schemes.BaseName
             };
-            summary.SetScheme(_palette.BaseScheme);
             _window.Add(summary);
             previous = summary;
 
@@ -229,24 +233,24 @@ internal sealed class TuiSessionWindow
                 Y = Pos.Bottom(previous),
                 Width = Dim.Fill(),
                 Height = 1,
-                Text = $"Total unlogged task time: {FormatMinutes(summarySource.TotalUnloggedMins)}    Total time: {FormatMinutes(summarySource.TotalTotalMins)}"
+                Text = $"Total unlogged task time: {FormatMinutes(summarySource.TotalUnloggedMins)}    Total time: {FormatMinutes(summarySource.TotalTotalMins)}",
+                SchemeName = _schemes.TotalsName
             };
-            totals.SetScheme(new Scheme(_palette.Totals));
             _window.Add(totals);
             previous = totals;
         }
 
         TimeEntry[] visible = _session.VisibleEntriesNewestFirst.ToArray();
-        EntryListDataSource entrySource = new(visible, _palette);
+        EntryListDataSource entrySource = new(visible, _schemes);
         ListView entries = new()
         {
             X = 0,
             Y = Pos.Bottom(previous),
             Width = Dim.Fill(),
             Height = Dim.Fill(1),
-            Source = entrySource
+            Source = entrySource,
+            SchemeName = _schemes.BaseName
         };
-        entries.SetScheme(_palette.BaseScheme);
 
         // Enter on the entry list opens the update flow - the same entry the Spectre menu
         // selection opens (its list order is newest-first, like DisplayMainMenu's choices)
@@ -302,7 +306,7 @@ internal sealed class TuiSessionWindow
         if(!MainWindowIsTop) return;
 
         string? task = EntryDialogs.PromptForText(
-            _app, _palette, "New entry", "Entry started, enter a task if desired:", string.Empty);
+            _app, _schemes, "New entry", "Entry started, enter a task if desired:", string.Empty);
 
         if(task is null) return; // ESC cancels before anything is stopped or started
 
@@ -347,7 +351,7 @@ internal sealed class TuiSessionWindow
         // the logged field is only offered for completed entries with a real task
         bool showLogged = _session.HasLoggedState(current.Id);
 
-        EntryDialogs.EntryUpdateResult? update = EntryDialogs.PromptForEntryUpdate(_app, _palette, current, showLogged);
+        EntryDialogs.EntryUpdateResult? update = EntryDialogs.PromptForEntryUpdate(_app, _schemes, current, showLogged);
         if(update is null) return; // ESC cancels, nothing is written
 
         EntryDialogs.EntryUpdateResult result = update.Value;
@@ -379,7 +383,7 @@ internal sealed class TuiSessionWindow
             .ToList();
 
         int? choice = EntryDialogs.SelectFromList(
-            _app, _palette, "Log a task group", "Select a task group to log (press ESC to cancel):", labels);
+            _app, _schemes, "Log a task group", "Select a task group to log (press ESC to cancel):", labels);
 
         if(choice is null) return;
 
@@ -405,7 +409,7 @@ internal sealed class TuiSessionWindow
             .ToList();
 
         int? choice = EntryDialogs.SelectFromList(
-            _app, _palette, "Deleted entries", "Select a deleted entry to restore (press ESC to cancel):", labels);
+            _app, _schemes, "Deleted entries", "Select a deleted entry to restore (press ESC to cancel):", labels);
 
         if(choice is null) return;
 
