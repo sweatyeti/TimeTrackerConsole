@@ -130,12 +130,12 @@ static int ContinueSession(int pageSize = 30, string? themeName = null, bool tui
         return 1;
     }
 
-    // Phase 0: --tui only opens the empty Terminal.Gui shell. Listing and resuming a
-    // session through Terminal.Gui arrives in a later phase; until then no session is
-    // read or written here
+    // Phase 1: the TUI renders a saved session read-only. RunContinue loads the newest
+    // snapshot through Session.LoadReadOnly (no EntryStore, so the TUI path cannot write
+    // to entries/); with no saved session it opens the empty shell as in Phase 0
     if(tui)
     {
-        new TuiSessionWindow().Run();
+        TuiSessionWindow.RunContinue(pageSize, theme);
         return 0;
     }
 
