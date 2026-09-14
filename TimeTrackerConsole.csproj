@@ -11,7 +11,7 @@
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
     <PackageReference Include="System.CommandLine" Version="2.0.7" />
-    <PackageReference Include="Terminal.Gui" Version="2.5.0" />
+    <PackageReference Include="Terminal.Gui" Version="2.4.17" />
   </ItemGroup>
 
 </Project>
