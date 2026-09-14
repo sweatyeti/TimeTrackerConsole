@@ -20,7 +20,7 @@ internal sealed class EntryListDataSource : IListDataSource
 {
     private readonly List<EntryRow> _rows = new();
 
-    public EntryListDataSource(IEnumerable<TimeEntry> entriesNewestFirst, TuiPalette palette)
+    public EntryListDataSource(IEnumerable<TimeEntry> entriesNewestFirst, TuiSchemes schemes)
     {
         List<TimeEntry> entries = entriesNewestFirst.Where(entry => !entry.IsDeleted).ToList();
 
@@ -39,7 +39,7 @@ internal sealed class EntryListDataSource : IListDataSource
 
         foreach(TimeEntry entry in entries)
         {
-            _rows.Add(BuildRow(entry, idWidth, taskWidth, timeWidth, palette));
+            _rows.Add(BuildRow(entry, idWidth, taskWidth, timeWidth, schemes));
         }
     }
 
@@ -101,18 +101,18 @@ internal sealed class EntryListDataSource : IListDataSource
         }
     }
 
-    private static EntryRow BuildRow(TimeEntry entry, int idWidth, int taskWidth, int timeWidth, TuiPalette palette)
+    private static EntryRow BuildRow(TimeEntry entry, int idWidth, int taskWidth, int timeWidth, TuiSchemes schemes)
     {
         RowBuilder builder = new();
 
-        builder.Append($"#{entry.Id}".PadRight(idWidth + 1), palette.Secondary);
+        builder.Append($"#{entry.Id}".PadRight(idWidth + 1), schemes.Secondary);
 
-        builder.Append(" | ", palette.Secondary);
-        builder.Append(entry.Task.PadRight(taskWidth), palette.Plain);
+        builder.Append(" | ", schemes.Secondary);
+        builder.Append(entry.Task.PadRight(taskWidth), schemes.Plain);
 
-        builder.Append(" | ", palette.Secondary);
+        builder.Append(" | ", schemes.Secondary);
         string timeText = $"{entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "In Progress")}".PadRight(timeWidth);
-        builder.Append(timeText, entry.IsComplete ? palette.Plain : palette.InProgress);
+        builder.Append(timeText, entry.IsComplete ? schemes.Plain : schemes.InProgress);
 
         // status column: Logged / Unlogged for completed real tasks, N/A otherwise
         // (in-progress entries and "none"-task entries have no logged/unlogged state).
@@ -121,16 +121,16 @@ internal sealed class EntryListDataSource : IListDataSource
         bool hasStatus = entry.IsComplete && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
         string statusText = hasStatus ? (entry.Logged ? "Logged" : "Unlogged") : "N/A";
         Attribute statusAttribute = hasStatus
-            ? (entry.Logged ? palette.Positive : palette.Unlogged)
-            : palette.Muted;
+            ? (entry.Logged ? schemes.Positive : schemes.Unlogged)
+            : schemes.Muted;
 
-        builder.Append(" | ", palette.Secondary);
+        builder.Append(" | ", schemes.Secondary);
         builder.Append(statusText.PadRight(Session.StatusColumnWidth), statusAttribute);
 
-        builder.Append(" | ", palette.Secondary);
+        builder.Append(" | ", schemes.Secondary);
         builder.Append(
             string.IsNullOrEmpty(entry.Description) ? "No description" : entry.Description,
-            string.IsNullOrEmpty(entry.Description) ? palette.Muted : palette.Plain);
+            string.IsNullOrEmpty(entry.Description) ? schemes.Muted : schemes.Plain);
 
         return builder.Build();
     }

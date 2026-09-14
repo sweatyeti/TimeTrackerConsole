@@ -22,10 +22,10 @@ internal sealed class SummaryTableSource : ITableSource
 
     private readonly record struct SummaryRow(string Task, int Count, double UnloggedMins, double TotalMins, bool HighlightUnlogged);
 
-    public SummaryTableSource(IEnumerable<TimeEntry> entries, TuiPalette palette)
+    public SummaryTableSource(IEnumerable<TimeEntry> entries, TuiSchemes schemes)
     {
-        _plainScheme = palette.BaseScheme;
-        _unloggedScheme = palette.UnloggedScheme();
+        _plainScheme = schemes.SummaryRowScheme(false);
+        _unloggedScheme = schemes.SummaryRowScheme(true);
 
         var taskQuery =
             from entry in entries

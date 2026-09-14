@@ -21,12 +21,12 @@ internal static class EntryDialogs
     private const int MaxListRows = 12;
 
     // T2.1/T2.3: single text field. Returns the typed text, or null when cancelled.
-    public static string? PromptForText(IApplication app, TuiPalette palette, string title, string message, string initialValue)
+    public static string? PromptForText(IApplication app, TuiSchemes schemes, string title, string message, string initialValue)
     {
         using Dialog dialog = new() { Title = title };
-        dialog.SetScheme(palette.BaseScheme);
+        dialog.SchemeName = schemes.BaseName;
 
-        Label prompt = new() { X = 1, Y = 1, Text = message };
+        Label prompt = new() { X = 1, Y = 1, Text = message, SchemeName = schemes.PromptName };
         TextField field = new() { X = 1, Y = 2, Width = FieldWidth, Text = initialValue ?? string.Empty };
 
         dialog.Add(prompt);
@@ -47,12 +47,12 @@ internal static class EntryDialogs
     // T2.3: the update-entry dialog. showLogged follows the Spectre rule exactly (only
     // completed, non-"none" entries have a logged state); when it is false no check box is
     // shown and the caller gets null back for logged, so the field is left untouched.
-    public static EntryUpdateResult? PromptForEntryUpdate(IApplication app, TuiPalette palette, TimeEntry entry, bool showLogged)
+    public static EntryUpdateResult? PromptForEntryUpdate(IApplication app, TuiSchemes schemes, TimeEntry entry, bool showLogged)
     {
         using Dialog dialog = new() { Title = $"Update entry #{entry.Id}" };
-        dialog.SetScheme(palette.BaseScheme);
+        dialog.SchemeName = schemes.BaseName;
 
-        dialog.Add(new Label { X = 1, Y = 1, Text = $"Entry #{entry.Id} ({(entry.IsComplete ? "completed" : "in progress")})" });
+        dialog.Add(new Label { X = 1, Y = 1, Text = $"Entry #{entry.Id} ({(entry.IsComplete ? "completed" : "in progress")})", SchemeName = schemes.PromptName });
 
         dialog.Add(new Label { X = 1, Y = 2, Text = "Task:" });
         TextField taskField = new() { X = 1, Y = 3, Width = FieldWidth, Text = entry.Task };
@@ -93,14 +93,14 @@ internal static class EntryDialogs
 
     // T2.5/T2.6/T2.7: pick one row from a list of already-formatted labels. Returns the
     // selected index, or null when cancelled (or when there is nothing to pick).
-    public static int? SelectFromList(IApplication app, TuiPalette palette, string title, string message, IReadOnlyList<string> items)
+    public static int? SelectFromList(IApplication app, TuiSchemes schemes, string title, string message, IReadOnlyList<string> items)
     {
         if(items.Count == 0) return null;
 
         using Dialog dialog = new() { Title = title };
-        dialog.SetScheme(palette.BaseScheme);
+        dialog.SchemeName = schemes.BaseName;
 
-        dialog.Add(new Label { X = 1, Y = 1, Text = message });
+        dialog.Add(new Label { X = 1, Y = 1, Text = message, SchemeName = schemes.PromptName });
 
         ListView list = new()
         {
@@ -110,7 +110,7 @@ internal static class EntryDialogs
             Height = Math.Min(items.Count, MaxListRows) + 1,
             Source = new ListWrapper<string>(new ObservableCollection<string>(items))
         };
-        list.SetScheme(palette.BaseScheme);
+        list.SchemeName = schemes.BaseName;
 
         // Enter on the list accepts the dialog, exactly like the Spectre SelectionPrompt.
         // Result has to be set explicitly here: the dialog only sets it when one of ITS
