@@ -75,16 +75,22 @@ internal sealed class TuiSessionWindow
     // flow) and resumes the chosen one in place. Returns the process exit code.
     public static int RunContinue(int pageSize, ConsoleTheme theme)
     {
-        using IApplication app = Application.Create();
-        app.Init();
-
+        // Checked BEFORE the driver is created. The Spectre path reports an empty list as a
+        // line of text rather than a dialog, and a MessageBox is the wrong tool here anyway:
+        // run as the app's very first runnable its message label auto-sizes against a zero-width
+        // superview and the whole dialog dies with "width ('-3') must be a non-negative value".
         List<(SessionSnapshot Snapshot, string FilePath)> sessions = EntryStore.ListAllSessions();
 
         if(sessions.Count == 0)
         {
-            EntryDialogs.ShowMessage(app, "Continue", "No previous sessions found.");
+            // fully qualified: this file deliberately imports Terminal.Gui's Color/Attribute
+            // namespaces, and a plain `using Spectre.Console` would collide with them
+            Spectre.Console.AnsiConsole.MarkupLine($"[{theme.ErrorMarkup}]No previous sessions found.[/]");
             return 0;
         }
+
+        using IApplication app = Application.Create();
+        app.Init();
 
         TuiSchemes schemes = new(theme);
         int? choice = EntryDialogs.SelectFromList(
