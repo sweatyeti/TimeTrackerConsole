@@ -91,8 +91,11 @@ internal sealed class TuiSchemes
         {
             Normal = Plain,
             HotNormal = Heading,
-            Focus = new Attribute(Plain.Foreground, Heading.Foreground),
-            HotFocus = new Attribute(Heading.Foreground, Plain.Background),
+            // the focus/selection fill is the theme's heading colour, so the text on top of it
+            // has to be picked for legibility against THAT fill. Using the plain foreground put
+            // white on "current"'s cyan heading and made the selected row unreadable.
+            Focus = new Attribute(ReadableOn(Heading.Foreground), Heading.Foreground),
+            HotFocus = new Attribute(ReadableOn(Accent.Foreground), Accent.Foreground),
             Active = new Attribute(Active, Background),
             Disabled = new Attribute(Inactive, Background),
             Highlight = new Attribute(Accent.Foreground, Background),
@@ -168,6 +171,25 @@ internal sealed class TuiSchemes
     }
 
     private static Color ToGui(SpectreColor color) => new(color.R, color.G, color.B);
+
+    // Picks black or white for text drawn on `background`, by relative luminance (the WCAG
+    // formula). The focus/selection blocks are filled with a theme accent colour, so the
+    // readable foreground depends on that fill, not on the theme's normal text colour - the
+    // previous code assumed the latter and put white on "current"'s cyan heading.
+    private static Color ReadableOn(Color background)
+    {
+        static double Linear(int channel)
+        {
+            double value = channel / 255.0;
+            return value <= 0.03928 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+        }
+
+        double luminance = (0.2126 * Linear(background.R))
+                         + (0.7152 * Linear(background.G))
+                         + (0.0722 * Linear(background.B));
+
+        return luminance > 0.4 ? new Color(0, 0, 0) : new Color(255, 255, 255);
+    }
 
     // "gold1 bold" / "#00afff bold" -> the colour token; the bold keyword is carried into the
     // attribute's TextStyle instead of the colour lookup

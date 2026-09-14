@@ -460,7 +460,10 @@ internal class Session
 
     // internal (not private) so the Terminal.Gui banner Label renders the same art
     // instead of duplicating the glyph table
-    internal static string BuildActiveStateArt(string label)
+    // letterGap/wordGap let a caller widen the block without duplicating the glyph table; the
+    // defaults (1 and 3) reproduce the original art byte-for-byte, so the Spectre path is
+    // unaffected. The Terminal.Gui path asks for a wider block.
+    internal static string BuildActiveStateArt(string label, int letterGap = 1, int wordGap = 3)
     {
         Dictionary<char, string[]> font = new()
         {
@@ -475,9 +478,11 @@ internal class Session
         };
 
         string[] words = label.Split(' ');
+        string letterJoiner = new(' ', letterGap);
+        string wordJoiner = new(' ', wordGap);
         string[] rows = Enumerable.Range(0, 5)
-            .Select(row => string.Join("   ", words.Select(word =>
-                string.Join(" ", word.Select(letter => font[letter][row].PadRight(5))))).TrimEnd())
+            .Select(row => string.Join(wordJoiner, words.Select(word =>
+                string.Join(letterJoiner, word.Select(letter => font[letter][row].PadRight(5))))).TrimEnd())
             .ToArray();
         int width = rows.Max(row => row.Length);
         return string.Join(Environment.NewLine, rows.Select(row => row.PadRight(width)));

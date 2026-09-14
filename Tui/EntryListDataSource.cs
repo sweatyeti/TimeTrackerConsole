@@ -78,9 +78,11 @@ internal sealed class EntryListDataSource : IListDataSource
 
         EntryRow entryRow = _rows[item];
 
-        // the selected row keeps a visible highlight: the colour is preserved and the
-        // background comes from the list's focus role, so the row still reads as selected
-        Color selectedBackground = listView.GetAttributeForRole(Terminal.Gui.Drawing.VisualRole.Focus).Background;
+        // The selected row paints on the list's Focus background, so BOTH the background and the
+        // foreground come from that role. Keeping the segment's own foreground put
+        // white-on-cyan for "current" and made the selected row unreadable; the Spectre path
+        // likewise lets its selection highlight mask the row's own colours.
+        Attribute selectedAttribute = listView.GetAttributeForRole(Terminal.Gui.Drawing.VisualRole.Focus);
 
         foreach(RowSegment segment in entryRow.Segments)
         {
@@ -88,9 +90,7 @@ internal sealed class EntryListDataSource : IListDataSource
             int to = Math.Min(segment.Start + segment.Length, viewportX + width);
             if(from >= to) continue;
 
-            Attribute attribute = selected
-                ? new Attribute(segment.Attribute.Foreground, selectedBackground, segment.Attribute.Style)
-                : segment.Attribute;
+            Attribute attribute = selected ? selectedAttribute : segment.Attribute;
 
             listView.SetAttribute(attribute);
             listView.Move(col + (from - viewportX), row);
