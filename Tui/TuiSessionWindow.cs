@@ -442,10 +442,36 @@ internal sealed class TuiSessionWindow
         if(!MainWindowIsTop) return;
 
         _session.EndSession();
-        RequestExit();
+        ExitNow();
     }
 
+    // Esc quits WITHOUT ending the session (it stays open for `continue`), and it is easy to
+    // hit by accident, so it asks first. F6 ("Stop+exit") is a deliberate two-part action and
+    // stays direct - it is the normal way to close out a session.
     private void RequestExit()
+    {
+        if(_exitRequested || !MainWindowIsTop) return;
+
+        // The confirm has to run after this key event finishes unwinding. Opening the dialog
+        // inline let the very same Esc that triggered it cancel the dialog immediately, so Esc
+        // looked like it did nothing at all.
+        _app.Invoke(() =>
+        {
+            if(_exitRequested || !MainWindowIsTop) return;
+
+            if(!EntryDialogs.Confirm(_app, "Quit",
+                "Exit TimeTracker? This session stays open and can be resumed with 'continue'.",
+                "Quit", "Keep working", defaultIsAffirmative: false))
+            {
+                return;
+            }
+
+            ExitNow();
+        });
+    }
+
+    // the actual unwind, shared by both exit paths once they have decided to go
+    private void ExitNow()
     {
         if(_exitRequested) return;
 
