@@ -7,65 +7,175 @@ using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
-// Terminal.Gui view for the migration. Phase 0 opened an empty shell; Phase 1 fills it
-// with READ-ONLY parity regions: banner (top), summary table, totals line, entry list
-// (fills the rest), status bar (bottom). Nothing in this path writes to disk - the
-// session it renders comes from Session.LoadReadOnly, which has no EntryStore.
+// Terminal.Gui view for the migration.
+// Phase 0 opened an empty shell; Phase 1 filled it with read-only regions (banner, summary,
+// totals, entry list, status bar) driven by Session.LoadReadOnly.
+// Phase 2 makes it WRITABLE: both entry points build a real Session (StartNewForTui /
+// Resume), so the existing EntryStore background flush writes the session JSON exactly as
+// the Spectre path does, and every flow (start/stop, update, soft delete, restore, log a
+// task group, stop tracking, stop and exit) runs through the same Session transitions as
+// the Spectre path - only the prompts differ (dialogs instead of Spectre prompts).
+//
+// Terminal.Gui owns the screen here: ConsoleBackdrop is deliberately never applied from this
+// path, and the screen is restored by Terminal.Gui before the final flush runs.
 internal sealed class TuiSessionWindow
 {
-    private readonly Session? _session;
+    private readonly IApplication _app;
+    private readonly Session _session;
+    private readonly TuiPalette _palette;
 
-    // Phase 0 entry point (`new --tui`): an empty shell. No session exists yet, and
-    // creating one would be a write, so the frame stays empty until the actions phase.
-    public TuiSessionWindow()
-    {
-    }
+    private Window? _window;
+    private int _selectedEntryId = -1;
+    private bool _exitRequested;
 
-    private TuiSessionWindow(Session session)
+    private TuiSessionWindow(IApplication app, Session session)
     {
+        _app = app;
         _session = session;
+        _palette = new TuiPalette(session.Theme);
     }
 
-    // Phase 1 entry point (`continue --tui`): renders the newest saved session
-    // read-only. Choosing among sessions is a flow (actions phase) concern; listing and
-    // selecting here would put a dialog in front of rendering that this phase is
-    // verifying. With no saved sessions the empty shell is shown, as before.
-    public static void RunContinue(int pageSize, ConsoleTheme theme)
+    // `new --tui`: creates a real, writable session (EntryStore + background flush) and opens
+    // the main window. The first entry's task is collected in a dialog first - the Spectre
+    // path asks for it inline as part of starting the session.
+    public static void RunNew(string? name, int pageSize, ConsoleTheme theme)
     {
-        List<(SessionSnapshot Snapshot, string FilePath)> sessions = EntryStore.ListAllSessions();
-        if(sessions.Count == 0)
-        {
-            new TuiSessionWindow().Run();
-            return;
-        }
-
-        Session session = Session.LoadReadOnly(sessions[0].Snapshot, pageSize, theme);
-        new TuiSessionWindow(session).Run();
-    }
-
-    public void Run()
-    {
-        // Q4: full-screen is the default AppModel (verified) - no assignment needed
         using IApplication app = Application.Create();
         app.Init();
-        using Window window = BuildWindow(app);
-        app.Run(window);
+
+        Session session = Session.StartNewForTui(name, pageSize, theme);
+
+        try
+        {
+            TuiPalette palette = new(session.Theme);
+            string? firstTask = EntryDialogs.PromptForText(
+                app, palette, "New entry", "Entry started, enter a task if desired:", string.Empty);
+
+            // Esc on the first prompt has no Spectre equivalent (its prompt cannot be
+            // cancelled), so it falls back to the same "none" task an empty answer gives
+            session.StartNewEntryWithTask(firstTask ?? string.Empty);
+
+            new TuiSessionWindow(app, session).RunWindow();
+        }
+        finally
+        {
+            // Terminal.Gui restores the terminal when the application is disposed; the final
+            // session flush runs afterwards, so nothing is written after the screen is handed
+            // back to the shell
+            app.Dispose();
+            session.Shutdown();
+        }
     }
 
-    private Window BuildWindow(IApplication app)
+    // `continue --tui`: lists every saved session (newest-first, exactly like the Spectre
+    // flow) and resumes the chosen one in place. Returns the process exit code.
+    public static int RunContinue(int pageSize, ConsoleTheme theme)
     {
-        TuiPalette palette = new(_session?.Theme ?? ConsoleTheme.Resolve(null));
+        using IApplication app = Application.Create();
+        app.Init();
 
+        List<(SessionSnapshot Snapshot, string FilePath)> sessions = EntryStore.ListAllSessions();
+
+        if(sessions.Count == 0)
+        {
+            EntryDialogs.ShowMessage(app, "Continue", "No previous sessions found.");
+            return 0;
+        }
+
+        TuiPalette palette = new(theme);
+        int? choice = EntryDialogs.SelectFromList(
+            app, palette, "Continue", "Select a session to resume (press ESC to cancel):", SessionLabels(sessions));
+
+        if(choice is null) return 0;
+
+        (SessionSnapshot snapshot, string filePath) = sessions[choice.Value];
+        Session session = Session.Resume(snapshot, filePath, pageSize, theme);
+
+        try
+        {
+            new TuiSessionWindow(app, session).RunWindow();
+        }
+        finally
+        {
+            app.Dispose();
+            session.Shutdown();
+        }
+
+        return 0;
+    }
+
+    // the same labels the Spectre continue prompt prints (index, name, start, unfinished marker)
+    private static IReadOnlyList<string> SessionLabels(List<(SessionSnapshot Snapshot, string FilePath)> sessions)
+    {
+        List<string> labels = new(sessions.Count);
+        for(int i = 0; i < sessions.Count; i++)
+        {
+            (SessionSnapshot snap, _) = sessions[i];
+            string status = snap.EndedAt is null ? " (unfinished)" : string.Empty;
+            labels.Add($"{i + 1}. {snap.Name ?? "Unnamed session"} - {snap.StartedAt:yyyy-MM-dd HH:mm}{status}");
+        }
+
+        return labels;
+    }
+
+    private void RunWindow()
+    {
         Window window = new()
         {
-            Title = _session is null ? "TimeTracker" : $"TimeTracker - {_session.Name}",
+            Title = $"TimeTracker - {_session.Name}",
             Width = Dim.Fill(),
             Height = Dim.Fill()
         };
-        window.SetScheme(palette.BaseScheme);
+        window.SetScheme(_palette.BaseScheme);
+        _window = window;
 
-        // --- banner (top, height derived from the art's own line count) -------------
-        bool isActive = _session?.IsActive == true;
+        // F2..F6 are the admin options of the Spectre main menu, in the same order and with the
+        // same behavior; Esc quits via the runnable's own default key (and by clicking the
+        // shortcut), which leaves the session unfinished exactly like Ctrl+C on the Spectre path
+        StatusBar statusBar = new(new List<Shortcut>
+        {
+            new(Key.F2, "Stop/start", StartOrStopEntry, null) { BindKeyToApplication = true },
+            new(Key.F3, "Log group", LogTaskGroupFlow, null) { BindKeyToApplication = true },
+            new(Key.F4, "Deleted", ViewDeletedFlow, null) { BindKeyToApplication = true },
+            new(Key.F5, "Stop tracking", StopTracking, null) { BindKeyToApplication = true },
+            new(Key.F6, "Stop+exit", StopAndExit, null) { BindKeyToApplication = true },
+            new(Key.Esc, "Quit", RequestExit, null)
+        })
+        {
+            X = 0,
+            Y = Pos.AnchorEnd(1),
+            Width = Dim.Fill()
+        };
+        statusBar.SetScheme(_palette.BaseScheme);
+
+        // the status bar is part of the rebuilt body, so it is added by BuildBody
+        _statusBar = statusBar;
+
+        BuildBody();
+
+        using(window)
+        {
+            _app.Run(window);
+        }
+
+        _window = null;
+    }
+
+    private StatusBar? _statusBar;
+
+    // rebuilds every region from the LIVE session state. Called once when the window opens and
+    // again after every action, so the banner, summary, totals and entry list always show the
+    // entry set that was just mutated - the TUI equivalent of the Spectre loop's clear+redraw.
+    private void BuildBody()
+    {
+        if(_window is null) return;
+
+        foreach(View view in _window.RemoveAll())
+        {
+            view.Dispose();
+        }
+
+        bool isActive = _session.IsActive;
         string art = Session.BuildActiveStateArt(isActive ? "ACTIVE" : "NOT ACTIVE");
 
         Label banner = new()
@@ -76,16 +186,15 @@ internal sealed class TuiSessionWindow
             Height = ArtHeightInLines(art),
             Text = art
         };
-        banner.SetScheme(new Scheme(isActive ? palette.BannerActive : palette.BannerInactive));
-        window.Add(banner);
+        banner.SetScheme(new Scheme(isActive ? _palette.BannerActive : _palette.BannerInactive));
+        _window.Add(banner);
 
-        // --- summary + totals + entries --------------------------------------------
-        View? previous = banner;
+        View previous = banner;
 
         // the Spectre path skips the whole summary section when there are no entries
-        if(_session is not null && _session.EntryCount > 0)
+        if(_session.EntryCount > 0)
         {
-            SummaryTableSource summarySource = new(_session.VisibleEntriesOldestFirst, palette);
+            SummaryTableSource summarySource = new(_session.VisibleEntriesOldestFirst, _palette);
 
             TableStyle summaryStyle = new()
             {
@@ -95,10 +204,7 @@ internal sealed class TuiSessionWindow
                 ShowHorizontalBottomLine = true,
                 ShowVerticalCellLines = true,
                 ExpandLastColumn = false,
-                // header text keeps the theme's heading colour instead of TableView's
-                // own default header scheme (part of Q8's accepted style change, but
-                // the colour still comes from the theme, not from an inline colour)
-                HeaderScheme = new Scheme(palette.Heading),
+                HeaderScheme = new Scheme(_palette.Heading),
                 RowColorGetter = summarySource.RowColorGetter
             };
 
@@ -113,11 +219,10 @@ internal sealed class TuiSessionWindow
                 Table = summarySource,
                 Style = summaryStyle
             };
-            summary.SetScheme(palette.BaseScheme);
-            window.Add(summary);
+            summary.SetScheme(_palette.BaseScheme);
+            _window.Add(summary);
             previous = summary;
 
-            // totals line: same text and same "none"-group exclusion as RenderTotalsLine
             Label totals = new()
             {
                 X = 0,
@@ -126,13 +231,13 @@ internal sealed class TuiSessionWindow
                 Height = 1,
                 Text = $"Total unlogged task time: {FormatMinutes(summarySource.TotalUnloggedMins)}    Total time: {FormatMinutes(summarySource.TotalTotalMins)}"
             };
-            totals.SetScheme(new Scheme(palette.Totals));
-            window.Add(totals);
+            totals.SetScheme(new Scheme(_palette.Totals));
+            _window.Add(totals);
             previous = totals;
         }
 
-        // --- entry list, filling everything above the status bar --------------------
-        EntryListDataSource entrySource = new(_session?.VisibleEntriesNewestFirst ?? Array.Empty<TimeEntry>(), palette);
+        TimeEntry[] visible = _session.VisibleEntriesNewestFirst.ToArray();
+        EntryListDataSource entrySource = new(visible, _palette);
         ListView entries = new()
         {
             X = 0,
@@ -141,32 +246,211 @@ internal sealed class TuiSessionWindow
             Height = Dim.Fill(1),
             Source = entrySource
         };
-        entries.SetScheme(palette.BaseScheme);
+        entries.SetScheme(_palette.BaseScheme);
+
+        // Enter on the entry list opens the update flow - the same entry the Spectre menu
+        // selection opens (its list order is newest-first, like DisplayMainMenu's choices)
+        entries.Accepting += (_, args) =>
+        {
+            args.Handled = true;
+            UpdateSelectedEntry(entries.SelectedItem ?? -1);
+        };
+
         if(entrySource.Count > 0)
         {
-            entries.SelectedItem = 0;
+            entries.SelectedItem = RestoredSelectionIndex(visible);
         }
-        window.Add(entries);
+        _window.Add(entries);
 
-        // --- status bar (bottom) ---------------------------------------------------
-        StatusBar statusBar = new(new List<Shortcut>
+        if(_statusBar is not null)
         {
-            new(Key.Esc, "Quit", () => app.RequestStop(), "Exit the read-only view")
-        })
-        {
-            X = 0,
-            Y = Pos.AnchorEnd(1),
-            Width = Dim.Fill()
-        };
-        statusBar.SetScheme(palette.BaseScheme);
-        window.Add(statusBar);
+            _statusBar.Y = Pos.AnchorEnd(1);
+            _window.Add(_statusBar);
+        }
 
-        return window;
+        entries.SetFocus();
     }
 
-    // the art is a fixed 5-row block; deriving the height from the string keeps the
-    // glyph table in Session as the single source of truth
+    // the art is a fixed 5-row block; deriving the height from the string keeps the glyph
+    // table in Session as the single source of truth
     private static int ArtHeightInLines(string art) => art.Count(character => character == '\n') + 1;
 
     private static string FormatMinutes(double minutes) => $"{TimeSpan.FromMinutes(minutes):hh\\:mm}";
+
+    // keeps the highlighted row on the same entry across a rebuild where possible; new entries
+    // (which sort to the top) fall back to the first row, as DisplayMainMenu does
+    private int RestoredSelectionIndex(IReadOnlyList<TimeEntry> visible)
+    {
+        for(int i = 0; i < visible.Count; i++)
+        {
+            if(visible[i].Id == _selectedEntryId) return i;
+        }
+
+        return 0;
+    }
+
+    // an application-bound shortcut (F2..F6) also fires while one of our dialog runnables is on
+    // top; an action must only ever run against the main window, or it would nest a dialog
+    // inside a dialog and mutate state from under the open prompt
+    private bool MainWindowIsTop => _window is not null && ReferenceEquals(_app.TopRunnable, _window);
+
+    // T2.1: the Spectre menu's "stop current entry and start a new one" / "start a new entry"
+    // option. The task is asked for first, so a cancelled (ESC) dialog leaves the session
+    // exactly as it was. Blank input becomes "none", as in the Spectre prompt.
+    private void StartOrStopEntry()
+    {
+        if(!MainWindowIsTop) return;
+
+        string? task = EntryDialogs.PromptForText(
+            _app, _palette, "New entry", "Entry started, enter a task if desired:", string.Empty);
+
+        if(task is null) return; // ESC cancels before anything is stopped or started
+
+        _session.StopCurrentEntry(); // no-op when nothing is in progress
+        _session.StartNewEntryWithTask(task);
+        Refresh();
+    }
+
+    // T2.3/T2.4: what the Spectre path runs when an entry is selected in the main menu. For a
+    // deletable entry it first offers the soft delete (default: no, as AnsiConsole.Confirm
+    // defaultValue: false), otherwise it opens the update dialog, whose logged check box only
+    // appears for completed non-"none" entries - the same rule the Spectre flow applies.
+    private void UpdateSelectedEntry(int index)
+    {
+        IReadOnlyList<TimeEntry> visible = _session.VisibleEntriesNewestFirst;
+        if(index < 0 || index >= visible.Count) return;
+
+        _selectedEntryId = visible[index].Id;
+
+        if(_session.IsDeletableEntry(_selectedEntryId))
+        {
+            bool delete = EntryDialogs.Confirm(
+                _app,
+                "Delete entry",
+                $"Delete this entry? (id {_selectedEntryId}, task '{visible[index].Task}')",
+                "Delete",
+                "Cancel",
+                defaultIsAffirmative: false); // AnsiConsole.Confirm(defaultValue: false)
+
+            if(delete)
+            {
+                _session.ApplyEntryDelete(_selectedEntryId);
+                Refresh();
+                return;
+            }
+        }
+
+        // re-read through the session (the row snapshot is only for display and its id)
+        TimeEntry? current = _session.FindEntry(_selectedEntryId);
+        if(current is null || !current.IsValid) return;
+
+        // the logged field is only offered for completed entries with a real task
+        bool showLogged = _session.HasLoggedState(current.Id);
+
+        EntryDialogs.EntryUpdateResult? update = EntryDialogs.PromptForEntryUpdate(_app, _palette, current, showLogged);
+        if(update is null) return; // ESC cancels, nothing is written
+
+        EntryDialogs.EntryUpdateResult result = update.Value;
+
+        // the Spectre prompts return their default (the current value) for an empty answer, so
+        // an empty field means "leave it as it is" rather than "clear it"
+        string task = string.IsNullOrEmpty(result.Task) ? current.Task : result.Task;
+        string description = string.IsNullOrEmpty(result.Description) ? current.Description : result.Description;
+
+        _session.ApplyEntryUpdate(current.Id, result.Logged, task, description);
+        Refresh();
+    }
+
+    // T2.5: log a whole task group - the distinct unlogged completed tasks, labelled with their
+    // unlogged count exactly as the Spectre SelectionPrompt labels them
+    private void LogTaskGroupFlow()
+    {
+        if(!MainWindowIsTop) return;
+
+        IReadOnlyList<string> taskGroups = _session.UnloggedTaskGroups;
+        if(taskGroups.Count == 0)
+        {
+            EntryDialogs.ShowMessage(_app, "Log a task group", "No task groups with unlogged entries to log.");
+            return;
+        }
+
+        List<string> labels = taskGroups
+            .Select(taskGroup => $"{taskGroup} ({_session.UnloggedEntryCount(taskGroup)} unlogged)")
+            .ToList();
+
+        int? choice = EntryDialogs.SelectFromList(
+            _app, _palette, "Log a task group", "Select a task group to log (press ESC to cancel):", labels);
+
+        if(choice is null) return;
+
+        _session.ApplyLogTaskGroup(taskGroups[choice.Value]);
+        Refresh();
+    }
+
+    // T2.6: the only place deleted entries are reachable - list them oldest-first with the
+    // "(deleted)" marker and restore the chosen one (confirmation, as on the Spectre path)
+    private void ViewDeletedFlow()
+    {
+        if(!MainWindowIsTop) return;
+
+        IReadOnlyList<TimeEntry> deleted = _session.DeletedEntriesOldestFirst;
+        if(deleted.Count == 0)
+        {
+            EntryDialogs.ShowMessage(_app, "Deleted entries", "No deleted entries.");
+            return;
+        }
+
+        List<string> labels = deleted
+            .Select(entry => $"Id: {entry.Id} {entry.Task} ({entry.StartTime:yyyy-MM-dd HH:mm} - {entry.EndTime:yyyy-MM-dd HH:mm}) (deleted)")
+            .ToList();
+
+        int? choice = EntryDialogs.SelectFromList(
+            _app, _palette, "Deleted entries", "Select a deleted entry to restore (press ESC to cancel):", labels);
+
+        if(choice is null) return;
+
+        if(!EntryDialogs.Confirm(_app, "Restore entry", "Restore this entry?", "Restore", "Cancel", defaultIsAffirmative: true))
+        {
+            return; // AnsiConsole.Confirm(defaultValue: true)
+        }
+
+        _session.ApplyEntryRestore(deleted[choice.Value].Id);
+        Refresh();
+    }
+
+    // T2.2: "stop tracking" - stop the in-progress entry and stay in the session
+    private void StopTracking()
+    {
+        if(!MainWindowIsTop) return;
+
+        _session.StopCurrentEntry();
+        Refresh();
+    }
+
+    // T2.2: "stop and exit" - end the session (stop the entry, stamp EndedAt, mark dirty) and
+    // unwind the app; the flush runs in RunNew/RunContinue after Terminal.Gui has restored the
+    // terminal, which is why this only requests the stop
+    private void StopAndExit()
+    {
+        if(!MainWindowIsTop) return;
+
+        _session.EndSession();
+        RequestExit();
+    }
+
+    private void RequestExit()
+    {
+        if(_exitRequested) return;
+
+        _exitRequested = true;
+        _app.RequestStop();
+    }
+
+    // redraw every region from the mutated session state (the TUI's clear+repaint)
+    private void Refresh()
+    {
+        BuildBody();
+        _window?.SetNeedsLayout();
+        _window?.SetNeedsDraw();
+    }
 }

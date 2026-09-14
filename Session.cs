@@ -38,6 +38,28 @@ internal class Session
 
     public static Session StartNew(string? name, int pageSize = 30, ConsoleTheme? theme = null)
     {
+        // the Spectre path prompts for the first entry's task as part of creating the session
+        Session session = StartNewCore(name, pageSize, theme);
+        session.StartNewEntry();
+        session._store.Start();
+
+        return session;
+    }
+
+    // Phase 2 (Terminal.Gui migration): the TUI creates a real, WRITABLE session - same
+    // EntryStore, same background flush loop, so the session JSON is written exactly as the
+    // Spectre path writes it. It differs only in the first entry's task: the Spectre path
+    // prompts inline, the TUI collects it in a dialog and calls StartNewEntryWithTask.
+    internal static Session StartNewForTui(string? name, int pageSize = 30, ConsoleTheme? theme = null)
+    {
+        Session session = StartNewCore(name, pageSize, theme);
+        session._store.Start();
+
+        return session;
+    }
+
+    private static Session StartNewCore(string? name, int pageSize, ConsoleTheme? theme)
+    {
         Session session = new();
 
         if(String.IsNullOrEmpty(name))
@@ -52,12 +74,6 @@ internal class Session
 
         // wire up the on-disk store (creates entries/ and resolves the collision-free file path)
         session._store = new EntryStore(session, name);
-
-        // create and populate the first time entry
-        session.StartNewEntry();
-
-        // start the background flush loop (immediate first check, then every 5 seconds)
-        session._store.Start();
 
         return session;
     }
@@ -108,8 +124,11 @@ internal class Session
 
     // Phase 1 (Terminal.Gui migration): builds the in-memory state from a snapshot
     // WITHOUT an EntryStore, so no background flush loop exists and nothing can be
-    // written to disk from this session. The TUI renders it read-only; the mutating
-    // actions (Phase 2) stay on sessions created by StartNew/Resume.
+    // written to disk from this session.
+    // Phase 2 note: both writable --tui flows (new/continue) now build REAL sessions through
+    // StartNewForTui/Resume, so nothing calls this today. It is kept deliberately: it is the
+    // only way to render a session with a hard guarantee of no writes, which a future
+    // read-only "view a previous session" screen needs.
     public static Session LoadReadOnly(SessionSnapshot snapshot, int pageSize = 30, ConsoleTheme? theme = null)
     {
         Session session = new();
@@ -152,6 +171,148 @@ internal class Session
         _timeEntries.Values.Where(e => !e.IsDeleted).OrderByDescending(e => e.Id).ToList();
 
     internal ConsoleTheme Theme => _theme;
+
+    // -----------------------------------------------------------------------------------
+    // Phase 2 (Terminal.Gui migration): the shared action surface.
+    // The Spectre flows below keep their prompts and call these same state transitions, so
+    // both UIs run one implementation of every guard and mutation.
+    // -----------------------------------------------------------------------------------
+
+    // the only place deleted entries are listed: oldest-first, same order as the Spectre flow
+    internal IReadOnlyList<TimeEntry> DeletedEntriesOldestFirst =>
+        _timeEntries.Values.Where(e => e.IsDeleted).OrderBy(e => e.Id).ToList();
+
+    // distinct tasks that still have unlogged completed work (deleted, in-progress and "none"
+    // entries are excluded) - the live choice set behind the "Log a task group" flow
+    internal IReadOnlyList<string> UnloggedTaskGroups =>
+        _timeEntries.Values
+            .Where(entry => !entry.IsDeleted
+                         && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase)
+                         && entry.IsComplete
+                         && !entry.Logged)
+            .Select(entry => entry.Task)
+            .Distinct()
+            .ToList();
+
+    internal int UnloggedEntryCount(string taskGroup) =>
+        _timeEntries.Values.Count(entry => !entry.IsDeleted
+                                        && entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase)
+                                        && entry.IsComplete
+                                        && !entry.Logged);
+
+    internal TimeEntry? FindEntry(int entryId) =>
+        _timeEntries.TryGetValue(entryId, out TimeEntry? entry) ? entry : null;
+
+    // the per-entry rules the update flow branches on - the same two conditions the Spectre
+    // UpdateEntryFlow tests before the delete confirm and before the logged prompt
+    internal bool IsDeletableEntry(int entryId) =>
+        _timeEntries.TryGetValue(entryId, out TimeEntry? entry) && entry.IsComplete && !entry.IsDeleted;
+
+    internal bool HasLoggedState(int entryId) =>
+        _timeEntries.TryGetValue(entryId, out TimeEntry? entry)
+        && entry.IsComplete
+        && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
+
+    // starts an entry with the task the caller already collected; blank input becomes "none",
+    // matching the Spectre StartNewEntry prompt's behavior for an empty answer
+    internal void StartNewEntryWithTask(string? task)
+    {
+        InsertNewEntry(TimeEntry.GetNextEntry(), task);
+    }
+
+    // the shared insert+activate transition. the entry (and therefore its StartTime) is
+    // created by the caller so the Spectre path can keep stamping the start time BEFORE its
+    // prompt, exactly as it always has
+    private void InsertNewEntry(TimeEntry newEntry, string? task)
+    {
+        string trimmedTask = (task ?? string.Empty).Trim();
+        if(String.IsNullOrEmpty(trimmedTask)) trimmedTask = "none";
+
+        newEntry.Task = trimmedTask;
+        lock(_store.MutationLock)
+        {
+            _timeEntries[newEntry.Id] = newEntry;
+        }
+        IsActive = true;
+        _store.MarkDirty();
+    }
+
+    // applies logged/task/description in ONE atomic block (the Spectre flow's was three
+    // separate lock blocks until issue #19's fix; both paths now share this one).
+    // logged == null means the entry has no logged state (in-progress or "none" task)
+    internal void ApplyEntryUpdate(int entryId, bool? logged, string? task, string? description)
+    {
+        if(!_timeEntries.TryGetValue(entryId, out TimeEntry? entry)) return;
+
+        lock(_store.MutationLock)
+        {
+            if(logged.HasValue) entry.Logged = logged.Value;
+            entry.Task = (task ?? string.Empty).Trim();
+            entry.Description = (description ?? string.Empty).Trim();
+        }
+
+        _store.MarkDirty();
+    }
+
+    // soft delete: flag the entry instead of removing it from the store, so it stays
+    // reachable through "View deleted entries" and survives a restart
+    internal bool ApplyEntryDelete(int entryId)
+    {
+        if(!IsDeletableEntry(entryId)) return false;
+
+        lock(_store.MutationLock)
+        {
+            _timeEntries[entryId].IsDeleted = true;
+        }
+        _store.MarkDirty();
+
+        return true;
+    }
+
+    internal bool ApplyEntryRestore(int entryId)
+    {
+        if(!_timeEntries.TryGetValue(entryId, out TimeEntry? entry) || !entry.IsDeleted) return false;
+
+        lock(_store.MutationLock)
+        {
+            entry.IsDeleted = false;
+        }
+        _store.MarkDirty();
+
+        return true;
+    }
+
+    // logs a whole task group in a single lock acquisition; in-progress entries are skipped
+    internal bool ApplyLogTaskGroup(string taskGroup)
+    {
+        if(String.IsNullOrEmpty(taskGroup)) return false;
+
+        lock(_store.MutationLock)
+        {
+            foreach(TimeEntry entry in _timeEntries.Values.Where(entry => !entry.IsDeleted && entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase)))
+            {
+                if(!entry.IsComplete) continue; // skip in progress entries, only log completed entries
+                entry.Logged = true;
+            }
+        }
+        _store.MarkDirty();
+
+        return true;
+    }
+
+    // stops the in-progress entry, stamps the end of the session and marks it dirty - with NO
+    // console output, so both UIs can do their own teardown afterwards (the Spectre path draws
+    // its final tables, the TUI returns to the shell so Terminal.Gui can restore the screen)
+    internal void EndSession()
+    {
+        StopCurrentEntry();
+
+        lock(_store.MutationLock)
+        {
+            EndedAt = DateTime.Now;
+        }
+        _store.MarkDirty();
+    }
 
     public void MainLoop()
     {
@@ -494,19 +655,12 @@ internal class Session
             .AllowEmpty()
             .ShowDefaultValue(false);
         string entryTask = AnsiConsole.Prompt(entryTaskPrompt);
-        string trimmedEntryTask = entryTask.Trim();
-        if(String.IsNullOrEmpty(trimmedEntryTask)) trimmedEntryTask = "none";
 
-        newEntry.Task = trimmedEntryTask;
-        lock(_store.MutationLock)
-        {
-            _timeEntries[newEntry.Id] = newEntry;
-        }
-        IsActive = true;
-        _store.MarkDirty();
+        // the shared transition applies the "blank means none" rule (StartNewEntryWithTask)
+        InsertNewEntry(newEntry, entryTask);
     }
 
-    private void StopCurrentEntry()
+    internal void StopCurrentEntry()
     {
         if(_timeEntries.Count == 0 || !IsActive) return;
 
@@ -537,14 +691,10 @@ internal class Session
         // issue #12: deletion lives inside the edit entry view. only completed,
         // non-deleted entries can be deleted - soft delete sets the IsDeleted flag
         // (the entry stays in the store and is only reachable via "View deleted entries")
-        if(selectedEntry.IsComplete && !selectedEntry.IsDeleted
+        if(IsDeletableEntry(selectedEntry.Id)
            && AnsiConsole.Confirm($"Delete this entry? (id {selectedEntry.Id}, task '{Markup.Escape(selectedEntry.Task)}')", defaultValue: false))
         {
-            lock(_store.MutationLock)
-            {
-                selectedEntry.IsDeleted = true;
-            }
-            _store.MarkDirty();
+            ApplyEntryDelete(selectedEntry.Id);
             return;
         }
 
@@ -552,7 +702,7 @@ internal class Session
         // mutation under the lock (was three separate lock blocks - the entry
         // update can no longer be persisted half-applied by a mid-flow flush)
         bool? updatedLogged = null;
-        if(selectedEntry.IsComplete && !selectedEntry.Task.Equals("none", StringComparison.OrdinalIgnoreCase))
+        if(HasLoggedState(selectedEntry.Id))
         {
             TextPrompt<bool> isItLoggedPrompt = new TextPrompt<bool>($"Is this entry logged? (current: {(selectedEntry.Logged ? "yes" : "no")})")
             .AddChoice(true)
@@ -581,28 +731,17 @@ internal class Session
 
         string updatedEntryDescription = updatedEntryDescriptionPrompt.Show(AnsiConsole.Console);
 
-        lock(_store.MutationLock)
-        {
-            if(updatedLogged.HasValue) selectedEntry.Logged = updatedLogged.Value;
-            selectedEntry.Task = updatedEntryTask.Trim();
-            selectedEntry.Description = updatedEntryDescription.Trim();
-        }
-
-        _store.MarkDirty();
+        // one atomic apply for all three fields (shared with the Terminal.Gui dialog flow)
+        ApplyEntryUpdate(selectedEntry.Id, updatedLogged, updatedEntryTask, updatedEntryDescription);
     }
 
     private void LogTaskGroupFlow()
     {
-        // get distinct task groups from entries that still have unlogged, completed work (deleted entries don't count)
-        IEnumerable<string> taskGroups = _timeEntries.Values
-            .Where(entry => !entry.IsDeleted
-                         && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase)
-                         && entry.IsComplete
-                         && !entry.Logged)
-            .Select(entry => entry.Task)
-            .Distinct();
+        // get distinct task groups from entries that still have unlogged, completed work
+        // (deleted, in-progress and "none" entries don't count) - the shared live projection
+        IReadOnlyList<string> taskGroups = UnloggedTaskGroups;
 
-        if(!taskGroups.Any())
+        if(taskGroups.Count == 0)
         {
             AnsiConsole.MarkupLine($"[{_theme.ErrorMarkup}]No task groups with unlogged entries to log. Press any key to continue...[/]");
             AnsiConsole.Console.Input.ReadKey(true);
@@ -612,27 +751,16 @@ internal class Session
         SelectionPrompt<string> taskGroupPrompt = new SelectionPrompt<string>()
             .Title("Select a task group to log (press ESC to cancel):")
             .AddChoices(taskGroups)
-            .UseConverter(taskGroup => $"{Markup.Escape(taskGroup)} ({_timeEntries.Values.Count(entry => !entry.IsDeleted && entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase) && entry.IsComplete && !entry.Logged)} unlogged)");
+            .UseConverter(taskGroup => $"{Markup.Escape(taskGroup)} ({UnloggedEntryCount(taskGroup)} unlogged)");
 
         taskGroupPrompt.CancelResult = () => string.Empty;
 
         string selectedTaskGroup = taskGroupPrompt.Show(AnsiConsole.Console);
 
         if(string.IsNullOrEmpty(selectedTaskGroup)) return;
-        
-        IEnumerable<TimeEntry> entriesInTaskGroup = _timeEntries.Values.Where(entry => !entry.IsDeleted && entry.Task.Equals(selectedTaskGroup, StringComparison.OrdinalIgnoreCase));
 
-        // single acquisition for the whole group: the lazy LINQ enumeration rides
-        // inside the lock, so the snapshot can never see a partially-logged group
-        lock(_store.MutationLock)
-        {
-            foreach(TimeEntry entry in entriesInTaskGroup)
-            {
-                if(!entry.IsComplete) continue; // skip in progress entries, only log completed entries
-                entry.Logged = true;
-            }
-        }
-        _store.MarkDirty();
+        // one lock acquisition for the whole group (shared with the Terminal.Gui dialog flow)
+        ApplyLogTaskGroup(selectedTaskGroup);
     }
 
     private void DeleteEntryFlow()
@@ -661,19 +789,15 @@ internal class Session
 
         // soft delete: flag the entry instead of removing it from the store so it can
         // later be viewed and restored from the "View deleted entries" menu
-        lock(_store.MutationLock)
-        {
-            selectedEntry.IsDeleted = true;
-        }
-        _store.MarkDirty();
+        ApplyEntryDelete(selectedEntry.Id);
     }
 
     // the only place deleted entries are viewable: lists them oldest-first and
     // restores the selected one by flipping its IsDeleted flag back to false
     private void ViewDeletedEntriesFlow()
     {
-        IEnumerable<TimeEntry> deletedEntries = _timeEntries.Values.Where(entry => entry.IsDeleted).OrderBy(entry => entry.Id);
-        if(!deletedEntries.Any())
+        IReadOnlyList<TimeEntry> deletedEntries = DeletedEntriesOldestFirst;
+        if(deletedEntries.Count == 0)
         {
             AnsiConsole.MarkupLine($"[{_theme.ErrorMarkup}]No deleted entries. Press any key to continue...[/]");
             AnsiConsole.Console.Input.ReadKey(true);
@@ -697,34 +821,29 @@ internal class Session
             return;
         }
 
-        lock(_store.MutationLock)
-        {
-            selectedEntry.IsDeleted = false;
-        }
-        _store.MarkDirty();
+        // flips IsDeleted back to false (shared with the Terminal.Gui dialog flow)
+        ApplyEntryRestore(selectedEntry.Id);
     }
 
     // IN PROGRESS
     private void StopSession(bool exit = false)
     {
-        StopCurrentEntry();
-
-        if (exit)
+        if(!exit)
         {
-            // mark the session as ended, flag the state as dirty, then let MainLoop
-            // unwind so Program.Main can perform the final on-disk flush before the
-            // process exits normally
-            lock(_store.MutationLock)
-            {
-                EndedAt = DateTime.Now;
-            }
-            _store.MarkDirty();
-
-            AnsiConsole.Clear();
-            DisplayEntries();
-            DisplaySummary();
-            _shouldExit = true;
-            // Environment.Exit(0); // replaced by the graceful unwind above so the final flush can run
+            StopCurrentEntry();
+            return;
         }
+
+        // stops the in-progress entry, stamps EndedAt and marks the state dirty - all state,
+        // no output (shared with the Terminal.Gui stop-and-exit path)
+        EndSession();
+
+        // the Spectre path's final render, then unwind MainLoop so Program.Main can perform
+        // the last on-disk flush before the process exits normally
+        AnsiConsole.Clear();
+        DisplayEntries();
+        DisplaySummary();
+        _shouldExit = true;
+        // Environment.Exit(0); // replaced by the graceful unwind above so the final flush can run
     }
 }

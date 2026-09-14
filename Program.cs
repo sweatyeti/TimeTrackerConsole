@@ -89,12 +89,13 @@ static int NewSession(string? name, int pageSize = 30, string? themeName = null,
         return 1;
     }
 
-    // Phase 0: --tui only opens the empty Terminal.Gui shell. Terminal.Gui owns the
-    // screen and restores it on exit, so the Spectre path's OSC backdrop is not
-    // applied here; no session exists yet, so nothing is written to entries/
+    // Phase 2: --tui now runs a real, WRITABLE session. It is created through the Session
+    // factory so the same EntryStore background flush writes the session JSON as on the Spectre
+    // path. Terminal.Gui owns the screen, so the OSC backdrop is deliberately not applied here,
+    // and the final flush runs after Terminal.Gui has restored the terminal (see RunNew).
     if(tui)
     {
-        new TuiSessionWindow().Run();
+        TuiSessionWindow.RunNew(name, pageSize, theme);
         return 0;
     }
 
@@ -130,13 +131,12 @@ static int ContinueSession(int pageSize = 30, string? themeName = null, bool tui
         return 1;
     }
 
-    // Phase 1: the TUI renders a saved session read-only. RunContinue loads the newest
-    // snapshot through Session.LoadReadOnly (no EntryStore, so the TUI path cannot write
-    // to entries/); with no saved session it opens the empty shell as in Phase 0
+    // Phase 2: --tui lists the saved sessions and resumes the chosen one in place, exactly
+    // like the Spectre flow below (same EntryStore.ListAllSessions order, same Session.Resume
+    // path, so the resumed session keeps appending to its own file)
     if(tui)
     {
-        TuiSessionWindow.RunContinue(pageSize, theme);
-        return 0;
+        return TuiSessionWindow.RunContinue(pageSize, theme);
     }
 
     List<(SessionSnapshot Snapshot, string FilePath)> sessions = EntryStore.ListAllSessions();
