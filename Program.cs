@@ -31,10 +31,18 @@ Option<int> pageSizeOption = new("--page-size")
 pageSizeOption.DefaultValueFactory = _ => 30;
 newSubCommand.Options.Add(pageSizeOption);
 
+Option<bool> tuiOption = new("--tui")
+{
+    Description = "Use the Terminal.Gui interface instead of the default Spectre.Console one."
+};
+tuiOption.DefaultValueFactory = _ => false;
+newSubCommand.Options.Add(tuiOption);
+
 newSubCommand.SetAction(parseResult => NewSession(
     parseResult.GetValue(nameOption),
     parseResult.GetValue(pageSizeOption),
-    parseResult.GetValue(themeOption)
+    parseResult.GetValue(themeOption),
+    parseResult.GetValue(tuiOption)
 ));
 
 Option<int> continuePageSizeOption = new("--page-size")
@@ -51,9 +59,17 @@ Option<string> continueThemeOption = new("--theme")
 continueThemeOption.DefaultValueFactory = _ => ConsoleTheme.DefaultThemeName;
 continueSubCommand.Options.Add(continueThemeOption);
 
+Option<bool> continueTuiOption = new("--tui")
+{
+    Description = "Use the Terminal.Gui interface instead of the default Spectre.Console one."
+};
+continueTuiOption.DefaultValueFactory = _ => false;
+continueSubCommand.Options.Add(continueTuiOption);
+
 continueSubCommand.SetAction(parseResult => ContinueSession(
     parseResult.GetValue(continuePageSizeOption),
-    parseResult.GetValue(continueThemeOption)
+    parseResult.GetValue(continueThemeOption),
+    parseResult.GetValue(continueTuiOption)
 ));
 
 return rootCommand.Parse(args).Invoke();
@@ -63,7 +79,7 @@ static void PrintInvalidTheme(string? themeName)
     AnsiConsole.MarkupLine($"[red bold]Unknown theme '{Markup.Escape(themeName ?? string.Empty)}'. Valid themes: {ConsoleTheme.ValidThemeList}.[/]");
 }
 
-static int NewSession(string? name, int pageSize = 30, string? themeName = null)
+static int NewSession(string? name, int pageSize = 30, string? themeName = null, bool tui = false)
 {
     // validate the theme up front: an invalid value must fail before any session
     // state exists, so no entries/*.json file is created by the attempt
@@ -71,6 +87,15 @@ static int NewSession(string? name, int pageSize = 30, string? themeName = null)
     {
         PrintInvalidTheme(themeName);
         return 1;
+    }
+
+    // Phase 0: --tui only opens the empty Terminal.Gui shell. Terminal.Gui owns the
+    // screen and restores it on exit, so the Spectre path's OSC backdrop is not
+    // applied here; no session exists yet, so nothing is written to entries/
+    if(tui)
+    {
+        new TuiSessionWindow().Run();
+        return 0;
     }
 
     // tint the console before the session starts so even the first task prompt sits
@@ -96,13 +121,22 @@ static int NewSession(string? name, int pageSize = 30, string? themeName = null)
     return 0;
 }
 
-static int ContinueSession(int pageSize = 30, string? themeName = null)
+static int ContinueSession(int pageSize = 30, string? themeName = null, bool tui = false)
 {
     // same up-front validation as NewSession (no session is touched on bad input)
     if(!ConsoleTheme.TryResolve(themeName, out ConsoleTheme theme))
     {
         PrintInvalidTheme(themeName);
         return 1;
+    }
+
+    // Phase 0: --tui only opens the empty Terminal.Gui shell. Listing and resuming a
+    // session through Terminal.Gui arrives in a later phase; until then no session is
+    // read or written here
+    if(tui)
+    {
+        new TuiSessionWindow().Run();
+        return 0;
     }
 
     List<(SessionSnapshot Snapshot, string FilePath)> sessions = EntryStore.ListAllSessions();
