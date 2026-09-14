@@ -6,8 +6,9 @@ internal class Session
     private Session() { }
 
     // width of the Logged/Unlogged/N-A status column in the main-menu entry rows:
-    // the wider of the labels, so everything pads out to the same width
-    private const int StatusColumnWidth = 8;
+    // the wider of the labels, so everything pads out to the same width.
+    // internal so the Terminal.Gui entry-row renderer pads to the same width
+    internal const int StatusColumnWidth = 8;
 
     private ConsoleTheme _theme = null!;
 
@@ -104,6 +105,53 @@ internal class Session
 
         return session;
     }
+
+    // Phase 1 (Terminal.Gui migration): builds the in-memory state from a snapshot
+    // WITHOUT an EntryStore, so no background flush loop exists and nothing can be
+    // written to disk from this session. The TUI renders it read-only; the mutating
+    // actions (Phase 2) stay on sessions created by StartNew/Resume.
+    public static Session LoadReadOnly(SessionSnapshot snapshot, int pageSize = 30, ConsoleTheme? theme = null)
+    {
+        Session session = new();
+
+        session.Name = snapshot.Name ?? "Unnamed session";
+        session._theme = theme ?? ConsoleTheme.Resolve(null);
+        session._pageSize = pageSize;
+        session.SessionId = snapshot.SessionId;
+        session.StartedAt = snapshot.StartedAt;
+        session.EndedAt = snapshot.EndedAt;
+
+        // the snapshot file is user-editable, so guard the string fields the display
+        // paths assume are non-null (a hand-edited file can deserialize them as null)
+        foreach(EntrySnapshot es in snapshot.Entries)
+        {
+            TimeEntry entry = TimeEntry.FromSnapshot(
+                es.Id, es.StartTime, es.EndTime, es.Task ?? "none",
+                es.Description ?? string.Empty, es.Logged, es.IsComplete, es.IsDeleted);
+            session._timeEntries[entry.Id] = entry;
+        }
+
+        // same rule as Resume: an in-progress (non-deleted, incomplete) entry means active
+        session.IsActive = session._timeEntries.Values.Any(e => !e.IsDeleted && !e.IsComplete);
+
+        // deliberately no TimeEntry.ReseedId here: a read-only session never mints an
+        // ID, and reseeding would mutate process-wide state for a session we do not own
+
+        return session;
+    }
+
+    // read-only projections for the Terminal.Gui view (Phase 1). Deleted entries are
+    // excluded everywhere, exactly as in the Spectre path.
+    // - oldest-first is the order DisplaySummary() walks the dictionary in, so the
+    //   summary's task groups appear in the same order in both UIs
+    // - newest-first is the order DisplayMainMenu() presents entries in
+    internal IReadOnlyList<TimeEntry> VisibleEntriesOldestFirst =>
+        _timeEntries.Values.Where(e => !e.IsDeleted).OrderBy(e => e.Id).ToList();
+
+    internal IReadOnlyList<TimeEntry> VisibleEntriesNewestFirst =>
+        _timeEntries.Values.Where(e => !e.IsDeleted).OrderByDescending(e => e.Id).ToList();
+
+    internal ConsoleTheme Theme => _theme;
 
     public void MainLoop()
     {
@@ -249,7 +297,9 @@ internal class Session
         AnsiConsole.WriteLine();
     }
 
-    private static string BuildActiveStateArt(string label)
+    // internal (not private) so the Terminal.Gui banner Label renders the same art
+    // instead of duplicating the glyph table
+    internal static string BuildActiveStateArt(string label)
     {
         Dictionary<char, string[]> font = new()
         {
