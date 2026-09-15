@@ -15,6 +15,9 @@ so the shapes stay reviewable next to the assertions that depend on them:
   corrupt-null.json       deserializes, task/description null  (must be normalized, then offered)
   corrupt-missing.json    no "entries" key at all              (must be normalized to empty)
   corrupt-future.json     schemaVersion 99                     (must be skipped, with a reason)
+  corrupt-noschema.json   no "schemaVersion" key at all        (reads as 0 -> skipped, with a reason)
+  corrupt-zero.json       schemaVersion 0                      (skipped, with a reason)
+  corrupt-negative.json   schemaVersion -1                     (skipped, with a reason)
 """
 
 import json
@@ -108,6 +111,24 @@ def main():
                      started="2026-09-14T10:00:00")
     future["schemaVersion"] = 99
     fixtures["corrupt-future.json"] = future
+
+    # schemaVersion absent entirely: the JSON layer leaves the record default (0), so the validator is
+    # the only thing that can tell this apart from a supported file. Explicit 0 and negative values are
+    # the same class of finding (a missing key and an explicit 0 deserialize identically).
+    no_schema = session("smoke-noschema", [], "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        started="2026-09-14T07:00:00")
+    del no_schema["schemaVersion"]
+    fixtures["corrupt-noschema.json"] = no_schema
+
+    zero = session("smoke-zero", [], "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                   started="2026-09-14T06:00:00")
+    zero["schemaVersion"] = 0
+    fixtures["corrupt-zero.json"] = zero
+
+    negative = session("smoke-negative", [], "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                       started="2026-09-14T05:00:00")
+    negative["schemaVersion"] = -1
+    fixtures["corrupt-negative.json"] = negative
 
     for name, payload in fixtures.items():
         if wanted and name not in wanted and name.removesuffix(".json") not in wanted:

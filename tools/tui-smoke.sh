@@ -235,16 +235,29 @@ scenario_scale() {
 scenario_corrupt() {
 	echo "scenario: malformed-but-deserializable sessions are normalized, unsupported ones are reported"
 	local dir="$SCRATCH/corrupt" ; mkdir -p "$dir/entries"
-	python3 "$FIXTURES" "$dir/entries" corrupt-null corrupt-missing corrupt-future > /dev/null
+	python3 "$FIXTURES" "$dir/entries" corrupt-null corrupt-missing corrupt-future \
+		corrupt-noschema corrupt-zero corrupt-negative > /dev/null
 
 	new_scene corrupt 120 40 "$dir" continue --tui
-	pick_first_session corrupt || { fail "corrupt: the session picker never appeared"; return; }
+	# capture the PICKER frame explicitly: it is the only frame that lists the session names, so this
+	# is where "offered" vs "refused" is observable (the window frame after Enter only shows the name
+	# of the session that was resumed)
+	wait_for corrupt "Select a session to resume" 40 || { fail "corrupt: the session picker never appeared"; return; }
+	sleep 2
+	frame corrupt "$SCRATCH/corrupt-picker.txt"
+	contains "corrupt: the readable session is offered" "$SCRATCH/corrupt-picker.txt" "smoke-null"
+	absent "corrupt: the newer-schema file is not offered" "$SCRATCH/corrupt-picker.txt" "smoke-future"
+	absent "corrupt: the no-schemaVersion file is not offered" "$SCRATCH/corrupt-picker.txt" "smoke-noschema"
+	absent "corrupt: the schemaVersion:0 file is not offered" "$SCRATCH/corrupt-picker.txt" "smoke-zero"
+	absent "corrupt: the negative-schemaVersion file is not offered" "$SCRATCH/corrupt-picker.txt" "smoke-negative"
+	no_exception "corrupt: no exception in the picker frame" "$SCRATCH/corrupt-picker.txt"
+
+	send corrupt Enter
 	wait_for_window corrupt || { fail "corrupt: window never rendered"; return; }
 	sleep 2
 	frame corrupt "$SCRATCH/corrupt-frame.txt"
 	contains "corrupt: the null-task session renders (task normalized to none)" \
 		"$SCRATCH/corrupt-frame.txt" "none"
-	absent "corrupt: the newer-schema file is not offered" "$SCRATCH/corrupt-frame.txt" "smoke-future"
 	no_exception "corrupt: no exception" "$SCRATCH/corrupt-frame.txt"
 
 	send corrupt F6 ; sleep 3
@@ -253,6 +266,20 @@ scenario_corrupt() {
 			"$SCRATCH/corrupt-exit.txt" "Skipped corrupt-future.json"
 		contains "corrupt: the reason names the unsupported schema version" \
 			"$SCRATCH/corrupt-exit.txt" "schema version 99"
+
+		# the finding this scenario exists for: a missing schemaVersion deserializes to 0 and must be
+		# reported as unsupported, not offered as a usable session
+		contains "corrupt: the missing-schemaVersion file is skipped with a reason" \
+			"$SCRATCH/corrupt-exit.txt" "Skipped corrupt-noschema.json"
+		contains "corrupt: the missing-schemaVersion reason is actionable" \
+			"$SCRATCH/corrupt-exit.txt" "schema version 0 is not supported"
+		contains "corrupt: the reason names the supported range" \
+			"$SCRATCH/corrupt-exit.txt" "schema versions 1..2"
+		contains "corrupt: an explicit schemaVersion 0 is skipped too" \
+			"$SCRATCH/corrupt-exit.txt" "Skipped corrupt-zero.json"
+		contains "corrupt: a negative schemaVersion is skipped too" \
+			"$SCRATCH/corrupt-exit.txt" "Skipped corrupt-negative.json"
+		no_exception "corrupt: no exception on the exit frame" "$SCRATCH/corrupt-exit.txt"
 	else
 		fail "corrupt: the app did not exit on F6"
 	fi

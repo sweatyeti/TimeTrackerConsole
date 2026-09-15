@@ -11,7 +11,7 @@
 # working directory) and never touches the repo's own entries/.
 #
 # Usage: tools/console-smoke.sh [--no-build] [--only <name>]
-#   names: actions | new | mixedcase
+#   names: actions | new | schema | mixedcase
 set -uo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -156,6 +156,46 @@ scenario_new() {
 	kill_scene new
 }
 
+# the schema-version range gate on the console path: a file whose schemaVersion is missing (absent
+# key -> 0), explicitly 0, or negative must be reported with a reason instead of being offered as a
+# resumable session. A supported session in the same directory must still be offered.
+scenario_schema() {
+	echo "scenario: unsupported schemaVersion values are reported, not offered (console path)"
+	local dir="$SCRATCH/schema" ; mkdir -p "$dir/entries"
+	python3 "$FIXTURES" "$dir/entries" basic corrupt-noschema corrupt-zero corrupt-negative > /dev/null
+
+	new_scene schema 120 40 "$dir" continue
+	wait_for schema "Select a session to resume" 40 || { fail "schema: the session picker never appeared"; return; }
+	sleep 1
+	frame schema "$SCRATCH/schema-picker.txt"
+
+	contains "schema: the supported session is still listed" "$SCRATCH/schema-picker.txt" "smoke-basic"
+	absent "schema: the missing-schemaVersion file is not offered" "$SCRATCH/schema-picker.txt" "smoke-noschema"
+	absent "schema: the schemaVersion:0 file is not offered" "$SCRATCH/schema-picker.txt" "smoke-zero"
+	absent "schema: the negative-schemaVersion file is not offered" "$SCRATCH/schema-picker.txt" "smoke-negative"
+
+	contains "schema: the missing-schemaVersion file is reported" \
+		"$SCRATCH/schema-picker.txt" "Skipped corrupt-noschema.json"
+	contains "schema: the missing-schemaVersion reason is actionable" \
+		"$SCRATCH/schema-picker.txt" "schema version 0 is not supported"
+	contains "schema: the reason names the supported range" \
+		"$SCRATCH/schema-picker.txt" "schema versions 1..2"
+	contains "schema: an explicit schemaVersion 0 is reported" \
+		"$SCRATCH/schema-picker.txt" "Skipped corrupt-zero.json"
+	contains "schema: a negative schemaVersion is reported" \
+		"$SCRATCH/schema-picker.txt" "Skipped corrupt-negative.json"
+	no_exception "schema: no exception in the picker frame" "$SCRATCH/schema-picker.txt"
+
+	# the readable session is still the only choice: Enter resumes it and the main menu comes up
+	send schema Enter
+	wait_for schema "Select an option" 30 || { fail "schema: the main menu never appeared"; return; }
+	sleep 1
+	frame schema "$SCRATCH/schema-menu.txt"
+	contains "schema: the supported session resumes normally" "$SCRATCH/schema-menu.txt" "In Progress"
+	no_exception "schema: no exception after resuming" "$SCRATCH/schema-menu.txt"
+	kill_scene schema
+}
+
 scenario_mixedcase() {
 	echo "scenario: mixed-case task names are one task group on the console path"
 	local dir="$SCRATCH/mixedcase" ; mkdir -p "$dir/entries"
@@ -198,9 +238,10 @@ if [ ! -f "$DLL" ]; then
 fi
 
 case "$ONLY" in
-	"") scenario_actions ; scenario_new ; scenario_mixedcase ;;
+	"") scenario_actions ; scenario_new ; scenario_schema ; scenario_mixedcase ;;
 	actions) scenario_actions ;;
 	new) scenario_new ;;
+	schema) scenario_schema ;;
 	mixedcase) scenario_mixedcase ;;
 	*) echo "unknown scenario: $ONLY" >&2; exit 2 ;;
 esac
