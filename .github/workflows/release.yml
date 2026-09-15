@@ -52,15 +52,18 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
+          # The project file is named explicitly: the solution also contains the test project, and
+          # publishing the solution would try to publish the tests single-file (NETSDK1098) and copy
+          # their output into ./publish.
           if [[ "${{ matrix.mode }}" == "selfcontained" ]]; then
-            dotnet publish -c Release -r "${{ matrix.rid }}" --self-contained true \
+            dotnet publish TimeTrackerConsole.csproj -c Release -r "${{ matrix.rid }}" --self-contained true \
               -p:PublishSingleFile=true -p:Version="$VERSION" -o ./publish
             mv "./publish/TimeTrackerConsole${{ matrix.ext }}" \
                "./TimeTrackerConsole-${{ matrix.id }}-$VERSION${{ matrix.ext }}"
           else
             # Portable = framework-dependent, no RID. Run anywhere a .NET 10
             # runtime is installed via: dotnet TimeTrackerConsole.dll
-            dotnet publish -c Release --self-contained false \
+            dotnet publish TimeTrackerConsole.csproj -c Release --self-contained false \
               -p:PublishSingleFile=false -p:Version="$VERSION" -o ./publish
             cp ./publish/TimeTrackerConsole.dll \
                ./publish/TimeTrackerConsole.deps.json \

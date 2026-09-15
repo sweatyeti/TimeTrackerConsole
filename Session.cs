@@ -82,9 +82,19 @@ internal class Session
     // to the same file on disk
     public static Session Resume(SessionSnapshot snapshot, string filePath, int pageSize, ConsoleTheme? theme = null)
     {
+        // One repair step for every load path (SnapshotNormalizer): a null Entries list, a null
+        // Task/Description or a duplicate id in a hand-edited file is fixed HERE, so Resume and
+        // LoadReadOnly can never disagree about what a snapshot means.
+        //
+        // Persistence consequence: Resume marks the session dirty, so the repaired values are
+        // written back to the user's file by the next flush (a legacy null task becomes "none" on
+        // disk). That is deliberate - the alternative is re-repairing the same file forever - and
+        // it is the existing dirty-on-resume behavior, not a new write path.
+        snapshot = SnapshotNormalizer.Normalize(snapshot);
+
         Session session = new();
 
-        session.Name = snapshot.Name ?? "Unnamed session";
+        session.Name = snapshot.Name;
         session._theme = theme ?? ConsoleTheme.Resolve(null);
         session._pageSize = pageSize;
         session.SessionId = snapshot.SessionId;
@@ -131,22 +141,25 @@ internal class Session
     // read-only "view a previous session" screen needs.
     public static Session LoadReadOnly(SessionSnapshot snapshot, int pageSize = 30, ConsoleTheme? theme = null)
     {
+        // same single repair step as Resume - this is the whole point of SnapshotNormalizer: the
+        // read-only path used to coalesce a different subset of the fields than Resume did
+        snapshot = SnapshotNormalizer.Normalize(snapshot);
+
         Session session = new();
 
-        session.Name = snapshot.Name ?? "Unnamed session";
+        session.Name = snapshot.Name;
         session._theme = theme ?? ConsoleTheme.Resolve(null);
         session._pageSize = pageSize;
         session.SessionId = snapshot.SessionId;
         session.StartedAt = snapshot.StartedAt;
         session.EndedAt = snapshot.EndedAt;
 
-        // the snapshot file is user-editable, so guard the string fields the display
-        // paths assume are non-null (a hand-edited file can deserialize them as null)
+        // TimeEntry.FromSnapshot gets non-null strings from the normalizer above
         foreach(EntrySnapshot es in snapshot.Entries)
         {
             TimeEntry entry = TimeEntry.FromSnapshot(
-                es.Id, es.StartTime, es.EndTime, es.Task ?? "none",
-                es.Description ?? string.Empty, es.Logged, es.IsComplete, es.IsDeleted);
+                es.Id, es.StartTime, es.EndTime, es.Task,
+                es.Description, es.Logged, es.IsComplete, es.IsDeleted);
             session._timeEntries[entry.Id] = entry;
         }
 
@@ -183,20 +196,24 @@ internal class Session
         _timeEntries.Values.Where(e => e.IsDeleted).OrderBy(e => e.Id).ToList();
 
     // distinct tasks that still have unlogged completed work (deleted, in-progress and "none"
-    // entries are excluded) - the live choice set behind the "Log a task group" flow
+    // entries are excluded) - the live choice set behind the "Log a task group" flow.
+    // Case-INSENSITIVE distinct, which is what every other part of this rule uses: the grouping key
+    // in the summary is lowercased, UnloggedEntryCount matches case-insensitively, and
+    // ApplyLogTaskGroup logs case-insensitively - so listing "weeding" and "Weeding" as two groups
+    // (each with both entries counted) offered a choice that logged more than it showed.
     internal IReadOnlyList<string> UnloggedTaskGroups =>
         _timeEntries.Values
             .Where(entry => !entry.IsDeleted
-                         && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase)
+                         && !IsNoTask(entry.Task)
                          && entry.IsComplete
                          && !entry.Logged)
             .Select(entry => entry.Task)
-            .Distinct()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
     internal int UnloggedEntryCount(string taskGroup) =>
         _timeEntries.Values.Count(entry => !entry.IsDeleted
-                                        && entry.Task.Equals(taskGroup, StringComparison.OrdinalIgnoreCase)
+                                        && string.Equals(entry.Task, taskGroup, StringComparison.OrdinalIgnoreCase)
                                         && entry.IsComplete
                                         && !entry.Logged);
 
@@ -208,22 +225,30 @@ internal class Session
     internal bool IsDeletableEntry(int entryId) =>
         _timeEntries.TryGetValue(entryId, out TimeEntry? entry) && entry.IsComplete && !entry.IsDeleted;
 
+    // "no task" for the logged/unlogged rules. A null task is treated as "none" so a rogue null
+    // cannot throw here; SnapshotNormalizer is what keeps nulls out of loaded sessions in the first
+    // place, this is the belt to that braces.
+    private static bool IsNoTask(string? task) =>
+        (task ?? "none").Equals("none", StringComparison.OrdinalIgnoreCase);
+
     internal bool HasLoggedState(int entryId) =>
         _timeEntries.TryGetValue(entryId, out TimeEntry? entry)
         && entry.IsComplete
-        && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
+        && !IsNoTask(entry.Task);
 
     // starts an entry with the task the caller already collected; blank input becomes "none",
-    // matching the Spectre StartNewEntry prompt's behavior for an empty answer
-    internal void StartNewEntryWithTask(string? task)
+    // matching the Spectre StartNewEntry prompt's behavior for an empty answer.
+    // Returns the new entry's id: the Terminal.Gui path focuses that row explicitly after the
+    // action instead of relying on where the list happens to land.
+    internal int StartNewEntryWithTask(string? task)
     {
-        InsertNewEntry(TimeEntry.GetNextEntry(), task);
+        return InsertNewEntry(TimeEntry.GetNextEntry(), task);
     }
 
     // the shared insert+activate transition. the entry (and therefore its StartTime) is
     // created by the caller so the Spectre path can keep stamping the start time BEFORE its
     // prompt, exactly as it always has
-    private void InsertNewEntry(TimeEntry newEntry, string? task)
+    private int InsertNewEntry(TimeEntry newEntry, string? task)
     {
         string trimmedTask = (task ?? string.Empty).Trim();
         if(String.IsNullOrEmpty(trimmedTask)) trimmedTask = "none";
@@ -235,6 +260,8 @@ internal class Session
         }
         IsActive = true;
         _store.MarkDirty();
+
+        return newEntry.Id;
     }
 
     // applies logged/task/description in ONE atomic block (the Spectre flow's was three
@@ -463,7 +490,10 @@ internal class Session
     // letterGap/wordGap let a caller widen the block without duplicating the glyph table; the
     // defaults (1 and 3) reproduce the original art byte-for-byte, so the Spectre path is
     // unaffected. The Terminal.Gui path asks for a wider block.
-    internal static string BuildActiveStateArt(string label, int letterGap = 1, int wordGap = 3)
+    // maxWidth (0 = no cap) lets a caller say "this must not be wider than the screen": the art is
+    // then built at the widest spacing that fits, and falls back to the plain label when even the
+    // tightest block does not, rather than being clipped by the view's viewport.
+    internal static string BuildActiveStateArt(string label, int letterGap = 1, int wordGap = 3, int maxWidth = 0)
     {
         Dictionary<char, string[]> font = new()
         {
@@ -477,15 +507,38 @@ internal class Session
             ['V'] = new[] { "#   #", "#   #", "#   #", " # #", "  #" }
         };
 
+        // widest first: the caller's own spacing, then the original Spectre spacing, then the
+        // tightest block that still reads as block letters
+        (int LetterGap, int WordGap)[] spacings = { (letterGap, wordGap), (1, 3), (0, 1) };
+
+        foreach((int gap, int wordGapCandidate) in spacings)
+        {
+            string[] rows = ComposeArtRows(label, font, gap, wordGapCandidate);
+
+            if(maxWidth <= 0 || rows.Max(row => row.Length) <= maxWidth)
+            {
+                return string.Join(Environment.NewLine, rows);
+            }
+        }
+
+        // nothing fits: a legible plain label beats a block clipped down to its left columns
+        return label;
+    }
+
+    private static string[] ComposeArtRows(string label, Dictionary<char, string[]> font, int letterGap, int wordGap)
+    {
         string[] words = label.Split(' ');
         string letterJoiner = new(' ', letterGap);
         string wordJoiner = new(' ', wordGap);
+
         string[] rows = Enumerable.Range(0, 5)
             .Select(row => string.Join(wordJoiner, words.Select(word =>
                 string.Join(letterJoiner, word.Select(letter => font[letter][row].PadRight(5))))).TrimEnd())
             .ToArray();
+
         int width = rows.Max(row => row.Length);
-        return string.Join(Environment.NewLine, rows.Select(row => row.PadRight(width)));
+
+        return rows.Select(row => row.PadRight(width)).ToArray();
     }
 
     // prints e.g. "Total unlogged task time: 01:15   Total time: 02:40" as its own line
@@ -667,17 +720,36 @@ internal class Session
 
     internal void StopCurrentEntry()
     {
-        if(_timeEntries.Count == 0 || !IsActive) return;
+        if(!IsActive) return;
 
-        TimeEntry currentEntry = _timeEntries[TimeEntry.LatestAssignedID];
-        if(currentEntry.IsComplete) return;
+        // The in-progress entry is the highest-id NON-DELETED, INCOMPLETE entry - not simply the
+        // highest-id entry. A resumed file (or a hand-edited one) can hold a completed or deleted
+        // entry above an unfinished one, and reading TimeEntry.LatestAssignedID meant the earlier
+        // shape made "stop current entry" a silent no-op: the banner stayed ACTIVE, the real
+        // in-progress entry could never be completed, and every following entry piled up behind it.
+        TimeEntry? currentEntry = _timeEntries.Values
+            .Where(entry => !entry.IsDeleted && !entry.IsComplete)
+            .OrderByDescending(entry => entry.Id)
+            .FirstOrDefault();
+
+        if(currentEntry is null)
+        {
+            // IsActive disagreed with the entries (nothing is actually in progress). Correct the
+            // flag instead of repeating a no-op on every action; no entry changes, so nothing is
+            // marked dirty.
+            IsActive = false;
+            return;
+        }
 
         lock(_store.MutationLock)
         {
             currentEntry.EndTime = DateTime.Now;
             currentEntry.IsComplete = true;
         }
-        IsActive = false;
+
+        // recomputed, not assumed: a malformed/legacy file can hold several unfinished entries and
+        // stopping one of them must not claim the session is idle
+        IsActive = _timeEntries.Values.Any(entry => !entry.IsDeleted && !entry.IsComplete);
         _store.MarkDirty();
     }
 

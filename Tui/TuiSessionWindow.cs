@@ -30,8 +30,12 @@ internal sealed class TuiSessionWindow
     private readonly TuiSchemes _schemes;
 
     private Window? _window;
-    private int _selectedEntryId = -1;
     private bool _exitRequested;
+
+    // the entry the NEXT refresh must focus, whatever the current row is: set by an action that
+    // knows which entry it just created (see StartOrStopEntry), consumed by Refresh. Null means
+    // "keep the row the user is on".
+    private int? _pendingSelectionEntryId;
 
     private TuiSessionWindow(IApplication app, Session session)
     {
@@ -80,39 +84,57 @@ internal sealed class TuiSessionWindow
         // line of text rather than a dialog, and a MessageBox is the wrong tool here anyway:
         // run as the app's very first runnable its message label auto-sizes against a zero-width
         // superview and the whole dialog dies with "width ('-3') must be a non-negative value".
-        List<(SessionSnapshot Snapshot, string FilePath)> sessions = EntryStore.ListAllSessions();
+        SessionFileListing listing = EntryStore.ListAllSessions();
+        List<(SessionSnapshot Snapshot, string FilePath)> sessions = listing.Sessions;
 
         if(sessions.Count == 0)
         {
+            ReportSkippedSessionFiles(listing, theme);
+
             // fully qualified: this file deliberately imports Terminal.Gui's Color/Attribute
             // namespaces, and a plain `using Spectre.Console` would collide with them
             Spectre.Console.AnsiConsole.MarkupLine($"[{theme.ErrorMarkup}]No previous sessions found.[/]");
             return 0;
         }
 
-        using IApplication app = Application.Create();
-        app.Init();
+        int exitCode = 0;
+        Session? session = null;
 
-        TuiSchemes schemes = new(theme);
-        int? choice = EntryDialogs.SelectFromList(
-            app, schemes, "Continue", "Select a session to resume (press ESC to cancel):", SessionLabels(sessions));
-
-        if(choice is null) return 0;
-
-        (SessionSnapshot snapshot, string filePath) = sessions[choice.Value];
-        Session session = Session.Resume(snapshot, filePath, pageSize, theme);
-
-        try
+        using(IApplication app = Application.Create())
         {
-            new TuiSessionWindow(app, session).RunWindow();
-        }
-        finally
-        {
-            app.Dispose();
-            session.Shutdown();
+            app.Init();
+
+            TuiSchemes schemes = new(theme);
+            int? choice = EntryDialogs.SelectFromList(
+                app, schemes, "Continue", "Select a session to resume (press ESC to cancel):", SessionLabels(sessions));
+
+            if(choice is not null)
+            {
+                (SessionSnapshot snapshot, string filePath) = sessions[choice.Value];
+                session = Session.Resume(snapshot, filePath, pageSize, theme);
+
+                new TuiSessionWindow(app, session).RunWindow();
+            }
         }
 
-        return 0;
+        // the final flush runs AFTER the driver has restored the terminal (same order the RunNew
+        // path documents), and the skipped-file report comes after that so it is actually visible:
+        // an unreadable session file is otherwise indistinguishable from a deleted one
+        session?.Shutdown();
+        ReportSkippedSessionFiles(listing, theme);
+
+        return exitCode;
+    }
+
+    // Mirrors Program.ReportSkippedSessionFiles: names the entries/*.json files that could not be
+    // offered, with the reason, and never touches them.
+    private static void ReportSkippedSessionFiles(SessionFileListing listing, ConsoleTheme theme)
+    {
+        foreach(SkippedSessionFile skipped in listing.Skipped)
+        {
+            Spectre.Console.AnsiConsole.MarkupLine(
+                $"[{theme.ErrorMarkup}]Skipped {Spectre.Console.Markup.Escape(System.IO.Path.GetFileName(skipped.FilePath))}: {Spectre.Console.Markup.Escape(skipped.Reason)}.[/]");
+        }
     }
 
     // the same labels the Spectre continue prompt prints (index, name, start, unfinished marker)
@@ -146,14 +168,16 @@ internal sealed class TuiSessionWindow
 
         // F2..F6 are the admin options of the Spectre main menu, in the same order and with the
         // same behavior.
-        StatusBar statusBar = new(new List<Shortcut>
+        _shortcuts = new[]
         {
-            new(Key.F2, "Stop/start", StartOrStopEntry, null) { BindKeyToApplication = true },
-            new(Key.F3, "Log group", LogTaskGroupFlow, null) { BindKeyToApplication = true },
-            new(Key.F4, "Deleted", ViewDeletedFlow, null) { BindKeyToApplication = true },
-            new(Key.F5, "Stop tracking", StopTracking, null) { BindKeyToApplication = true },
-            new(Key.F6, "Stop+exit", StopAndExit, null) { BindKeyToApplication = true }
-        })
+            new Shortcut(Key.F2, FullShortcutTitles[0], StartOrStopEntry, null) { BindKeyToApplication = true },
+            new Shortcut(Key.F3, FullShortcutTitles[1], LogTaskGroupFlow, null) { BindKeyToApplication = true },
+            new Shortcut(Key.F4, FullShortcutTitles[2], ViewDeletedFlow, null) { BindKeyToApplication = true },
+            new Shortcut(Key.F5, FullShortcutTitles[3], StopTracking, null) { BindKeyToApplication = true },
+            new Shortcut(Key.F6, FullShortcutTitles[4], StopAndExit, null) { BindKeyToApplication = true }
+        };
+
+        StatusBar statusBar = new(_shortcuts)
         {
             X = 0,
             Y = Pos.AnchorEnd(1),
@@ -163,6 +187,12 @@ internal sealed class TuiSessionWindow
 
         // the status bar is added by BuildOnce and lives for the life of the window
         _statusBar = statusBar;
+
+        // resize support: the banner spacing, the status-bar titles and the summary/viewport budget
+        // all depend on the window size, and the window owns that state. Re-running Refresh on a
+        // viewport change re-applies them; it converges (Refresh does not change the window's own
+        // viewport), so this cannot loop.
+        window.ViewportChanged += (_, _) => Refresh();
 
         BuildOnce();
 
@@ -175,6 +205,14 @@ internal sealed class TuiSessionWindow
     }
 
     private StatusBar? _statusBar;
+
+    // the F2..F6 shortcuts, kept so the titles can be shortened on a narrow terminal (the bar clips
+    // from the right, and F6 is the only way out of the window)
+    private Shortcut[] _shortcuts = Array.Empty<Shortcut>();
+
+    // normal widths vs. a terminal narrow enough that the full titles would clip the bar
+    private static readonly string[] FullShortcutTitles = { "Stop/start", "Log group", "Deleted", "Stop tracking", "Stop+exit" };
+    private static readonly string[] CompactShortcutTitles = { "Start/stop", "Log", "Deleted", "Stop", "Stop+exit" };
 
     // region fields: each region is built ONCE and lives for the life of the window. A refresh
     // mutates these views and their data sources in place (see Refresh) rather than tearing the
@@ -235,7 +273,10 @@ internal sealed class TuiSessionWindow
             X = 0,
             Y = Pos.Bottom(_summary) + 1,
             Width = Dim.Fill(),
-            Height = 1
+            Height = 1,
+            // the totals line carries the same emphasis role the Spectre path renders it in
+            // (TotalsMarkup) - the scheme existed but was never assigned to this label
+            SchemeName = _schemes.TotalsName
         };
         _window.Add(_totals);
 
@@ -325,19 +366,11 @@ internal sealed class TuiSessionWindow
     // position, not the selected row - reading it sent Enter to row 0 regardless of the highlight.
     private int SelectedEntryRow() => _entries?.Value?.SelectedCell.Y ?? -1;
 
+    // The id of the entry the user is actually on, resolved through the CURRENT source - which is
+    // why Refresh has to read it BEFORE it replaces the source contents.
+    private int CurrentRowEntryId() => _entrySource?.EntryAt(SelectedEntryRow())?.Id ?? -1;
+
     private static string FormatMinutes(double minutes) => $"{TimeSpan.FromMinutes(minutes):hh\\:mm}";
-
-    // keeps the highlighted row on the same entry across a rebuild where possible; new entries
-    // (which sort to the top) fall back to the first row, as DisplayMainMenu does
-    private int RestoredSelectionIndex(IReadOnlyList<TimeEntry> visible)
-    {
-        for(int i = 0; i < visible.Count; i++)
-        {
-            if(visible[i].Id == _selectedEntryId) return i;
-        }
-
-        return 0;
-    }
 
     // an application-bound shortcut (F2..F6) also fires while one of our dialog runnables is on
     // top; an action must only ever run against the main window, or it would nest a dialog
@@ -357,7 +390,12 @@ internal sealed class TuiSessionWindow
         if(task is null) return; // ESC cancels before anything is stopped or started
 
         _session.StopCurrentEntry(); // no-op when nothing is in progress
-        _session.StartNewEntryWithTask(task);
+
+        // Explicit outcome, not a fallback: the new entry is what the user just acted on, so the
+        // list must highlight it. (The console menu cannot express this - its first selectable row
+        // is an admin option - so this is the TUI's documented choice: the new entry is focused and
+        // is the newest row, i.e. row 0.)
+        _pendingSelectionEntryId = _session.StartNewEntryWithTask(task);
         Refresh();
     }
 
@@ -370,28 +408,30 @@ internal sealed class TuiSessionWindow
         IReadOnlyList<TimeEntry> visible = _session.VisibleEntriesNewestFirst;
         if(index < 0 || index >= visible.Count) return;
 
-        _selectedEntryId = visible[index].Id;
+        // the row's entry, for this flow: the row index is only valid against the list it came from,
+        // so nothing but the id is carried past this point
+        int entryId = visible[index].Id;
 
-        if(_session.IsDeletableEntry(_selectedEntryId))
+        if(_session.IsDeletableEntry(entryId))
         {
             bool delete = EntryDialogs.Confirm(
                 _app,
                 "Delete entry",
-                $"Delete this entry? (id {_selectedEntryId}, task '{visible[index].Task}')",
+                $"Delete this entry? (id {entryId}, task '{visible[index].Task}')",
                 "Delete",
                 "Cancel",
                 defaultIsAffirmative: false); // AnsiConsole.Confirm(defaultValue: false)
 
             if(delete)
             {
-                _session.ApplyEntryDelete(_selectedEntryId);
+                _session.ApplyEntryDelete(entryId);
                 Refresh();
                 return;
             }
         }
 
         // re-read through the session (the row snapshot is only for display and its id)
-        TimeEntry? current = _session.FindEntry(_selectedEntryId);
+        TimeEntry? current = _session.FindEntry(entryId);
         if(current is null || !current.IsValid) return;
 
         // the logged field is only offered for completed entries with a real task
@@ -510,44 +550,86 @@ internal sealed class TuiSessionWindow
             return;
         }
 
+        // 1. Selection: capture the id of the entry the user is actually on BEFORE the source is
+        // replaced. A row index only means something against the content it was measured on, so
+        // reading it after the swap (or ignoring it and defaulting to row 0) reset the user's
+        // Up/Down navigation on every F-key refresh.
+        int selectedId = CurrentRowEntryId();
+        int? pendingSelectionId = _pendingSelectionEntryId;
+        _pendingSelectionEntryId = null;
+        int? focusId = pendingSelectionId ?? (selectedId >= 0 ? selectedId : null);
+
+        // 2. Banner: the block is built at the widest spacing that fits the window, so it is not
+        // clipped into nonsense on a narrow terminal; the height is fixed (see ArtHeightInLines) so
+        // the rest of the layout does not move with it.
         bool isActive = _session.IsActive;
-        // a wider letter/word gap than the Spectre art, so the banner reads as a banner in a
-        // full-width window rather than a narrow strip pinned to the left
-        _banner.Text = Session.BuildActiveStateArt(isActive ? "ACTIVE" : "NOT ACTIVE", letterGap: 3, wordGap: 5);
+        _banner.Text = Session.BuildActiveStateArt(isActive ? "ACTIVE" : "NOT ACTIVE", letterGap: 3, wordGap: 5, maxWidth: _window.Viewport.Width);
         _banner.SchemeName = isActive ? _schemes.BannerActiveName : _schemes.BannerInactiveName;
 
-        // the Spectre path skips the whole summary section when there are no entries. An invisible
-        // view still occupies layout space, so the height has to collapse as well or the entry
-        // list would sit behind a blank block.
-        bool showSummary = _session.EntryCount > 0;
-        bool summaryWasVisible = _summary.Visible;
+        // 3. Content: both tables project from the same session state; the summary skips the whole
+        // section when there are no (non-deleted) entries, exactly as the Spectre path does.
+        IReadOnlyList<TimeEntry> visibleNewestFirst = _session.VisibleEntriesNewestFirst;
+        bool hasEntries = _session.EntryCount > 0;
 
         _summarySource.Update(_session.VisibleEntriesOldestFirst);
-        _summary.Height = showSummary ? _summarySource.Rows + 3 // header row + header rule + bottom line
-                                      : 0;
+        _entrySource.Update(visibleNewestFirst);
+
+        // 4. Geometry: the summary is capped against the actual window height so the totals line,
+        // the entry table and the status bar keep usable rows (0 = collapsed, e.g. before the first
+        // layout pass or on a window too small for the summary chrome).
+        int summaryHeight = hasEntries
+            ? ViewportBudget.SummaryHeight(_window.Viewport.Height, _summarySource.Rows, visibleNewestFirst.Count > 0)
+            : 0;
+        bool showSummary = summaryHeight > 0;
+
+        _summary.Height = summaryHeight;
         _summary.Visible = showSummary;
 
+        // the totals line is not tied to the summary's own height: it stays visible when the budget
+        // collapses the summary, which is exactly the case where the numbers matter most
+        _totals.Height = hasEntries ? 1 : 0;
+        _totals.Visible = hasEntries;
         _totals.Text = $"Total unlogged task time: {FormatMinutes(_summarySource.TotalUnloggedMins)}    Total time: {FormatMinutes(_summarySource.TotalTotalMins)}";
-        _totals.Height = showSummary ? 1 : 0;
-        _totals.Visible = showSummary;
 
-        _entrySource.Update(_session.VisibleEntriesNewestFirst);
-
-        // keep the highlight on the same entry where possible; a new entry (which sorts to the
-        // top) falls back to the first row, as DisplayMainMenu does. Only re-applied when it is
-        // actually different, so a refresh cannot fight the user's own navigation.
+        // 5. Selection restore + the status bar's narrow-width titles
         if(_entrySource.Rows > 0)
         {
-            int target = RestoredSelectionIndex(_session.VisibleEntriesNewestFirst);
+            int target = EntrySelection.RestoreIndex(visibleNewestFirst, focusId);
+
+            // only when it actually differs, so a refresh cannot fight the user's own navigation
             if(SelectedEntryRow() != target)
             {
                 _entries.Value = new TableSelection(new Point(0, target));
             }
         }
 
-        _window.SetNeedsDraw();
+        ApplyStatusBarTitles(ViewportBudget.UseCompactStatusBarTitles(_window.Viewport.Width));
 
-        // only the summary toggle changes geometry; everything else is a content change
-        if(showSummary != summaryWasVisible) _window.SetNeedsLayout();
+        // 6. Tell the tables their content changed. TableView measures each column from the data
+        // source and caches the result (_columnsToRenderCache); mutating the source in place is
+        // invisible to it, so a longer task / description / "In Progress" label stayed ellipsized
+        // until something else invalidated the cache (a resize or a new Table). Update() is the
+        // documented "reflect changes to Table" call that drops that cache, and the layout pass
+        // below re-measures the column widths before the next paint instead of relying on a redraw.
+        _summary.Update();
+        _entries.Update();
+
+        _window.SetNeedsLayout();
+        _window.SetNeedsDraw();
+    }
+
+    // The status bar clips from the right when the shortcuts do not fit, which on a 60-column
+    // terminal hid F6 - the only way out of the window. Titles are swapped only when the width
+    // actually crosses the threshold, so the change is a no-op at normal sizes.
+    private void ApplyStatusBarTitles(bool compact)
+    {
+        if(_shortcuts.Length == 0) return;
+
+        string[] titles = compact ? CompactShortcutTitles : FullShortcutTitles;
+
+        for(int i = 0; i < _shortcuts.Length; i++)
+        {
+            if(_shortcuts[i].Title != titles[i]) _shortcuts[i].Title = titles[i];
+        }
     }
 }

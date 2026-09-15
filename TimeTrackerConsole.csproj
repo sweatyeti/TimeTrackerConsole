@@ -6,12 +6,22 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Version>1.1.0</Version>
+
+    <!-- The test project lives under this directory; keep its sources out of the app's own globs
+         (without this the app compiles the test files, and its xunit references do not resolve). -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);TimeTrackerConsole.Tests/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
     <PackageReference Include="System.CommandLine" Version="2.0.7" />
     <PackageReference Include="Terminal.Gui" Version="2.4.17" />
+  </ItemGroup>
+
+  <!-- The test project asserts on the internal Session/EntryStore/TUI projections. Granted to that
+       one assembly only: the app's types stay internal to everything else. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="TimeTrackerConsole.Tests" />
   </ItemGroup>
 
 </Project>
