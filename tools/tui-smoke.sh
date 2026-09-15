@@ -133,6 +133,10 @@ kill_scene() { tmux -L "$SOCKET" kill-session -t "$1" 2>/dev/null; }
 
 # asserts no scene ever printed an unhandled exception (checked on the exit frames)
 no_exception() { # name file
+	if [ ! -f "$2" ]; then
+		fail "$1 - no captured frame at $2 (the check would otherwise pass for the wrong reason)"
+		return
+	fi
 	if grep -qE 'Unhandled exception|System\.[A-Za-z]*Exception' "$2"; then
 		fail "$1 - frame contains an exception"
 	else

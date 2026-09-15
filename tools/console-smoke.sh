@@ -63,6 +63,10 @@ wait_for() { # scene needle seconds
 }
 
 no_exception() { # name file
+	if [ ! -f "$2" ]; then
+		fail "$1 - no captured frame at $2 (the check would otherwise pass for the wrong reason)"
+		return
+	fi
 	if grep -qE 'Unhandled exception|System\.[A-Za-z]*Exception' "$2"; then
 		fail "$1 - frame contains an exception"
 	else
@@ -139,8 +143,10 @@ scenario_new() {
 
 	send new Down ; sleep 1 ; send new Down ; sleep 1 ; send new Down ; sleep 1 ; send new Down ; sleep 1 ; send new Enter
 	wait_for new "TTC-EXITED" 30 || { fail "new: the app did not exit"; return; }
-	no_exception "new: no exception" "$SCRATCH/new-exit.txt"
+	# capture BEFORE asserting on the file: a check that greps a file that does not exist yet passes
+	# for the wrong reason (grep's "no such file" is treated as "no exception found")
 	frame new "$SCRATCH/new-exit.txt"
+	no_exception "new: no exception" "$SCRATCH/new-exit.txt"
 
 	if ls "$dir"/entries/*.json > /dev/null 2>&1; then
 		pass "new: the session file was written under the scratch entries/ directory"
