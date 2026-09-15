@@ -128,12 +128,9 @@ internal sealed class TuiSessionWindow
         return labels;
     }
 
-    // Esc on the main window is intentionally inert - see the status bar in RunWindow
-    private static void NoOp() { }
-
     private void RunWindow()
     {
-        Window window = new()
+        MainWindow window = new()
         {
             Title = $"TimeTracker - {_session.Name}",
             Width = Dim.Fill(),
@@ -142,34 +139,19 @@ internal sealed class TuiSessionWindow
         };
         _window = window;
 
-        // Esc must do NOTHING on the main window (user decision). Terminal.Gui's default Esc
-        // binding is Command.Quit, which stops the topmost runnable - exactly right inside a
-        // dialog (that IS the mechanism that cancels one) and exactly wrong here. Three
-        // approaches that do NOT work, all verified: a window-level `Command.NotBound` binding
-        // does not consume the key; an invisible (`Visible = false`) shortcut is skipped by input
-        // routing; and removing the framework's Command.Quit default takes Esc away from every
-        // dialog too. A VISIBLE bound shortcut does consume it, so Esc gets one with an empty
-        // action, zero width so it renders nothing while still taking part in input. It lives in
-        // the status bar because the action shortcuts there are the ones that reliably receive
-        // keys, and because BuildBody rebuilds (and disposes) every window child on each action.
-        Shortcut escSwallow = new(Key.Esc, string.Empty, NoOp, null)
-        {
-            Width = 0,
-            Height = 0
-        };
+        // Esc is handled by MainWindow (see Tui/MainWindow.cs): the window declares Command.Quit
+        // and reports it handled, so the application-scoped Esc -> Quit binding never runs and the
+        // window cannot be closed with Esc. F6 is the way out.
 
         // F2..F6 are the admin options of the Spectre main menu, in the same order and with the
-        // same behavior. Esc is deliberately NOT bound here: on the main window Esc does nothing
-        // (user decision - it is far too easy to hit by accident while moving around the list),
-        // while inside a dialog Esc still cancels that dialog. F6 is the way out.
+        // same behavior.
         StatusBar statusBar = new(new List<Shortcut>
         {
             new(Key.F2, "Stop/start", StartOrStopEntry, null) { BindKeyToApplication = true },
             new(Key.F3, "Log group", LogTaskGroupFlow, null) { BindKeyToApplication = true },
             new(Key.F4, "Deleted", ViewDeletedFlow, null) { BindKeyToApplication = true },
             new(Key.F5, "Stop tracking", StopTracking, null) { BindKeyToApplication = true },
-            new(Key.F6, "Stop+exit", StopAndExit, null) { BindKeyToApplication = true },
-            escSwallow
+            new(Key.F6, "Stop+exit", StopAndExit, null) { BindKeyToApplication = true }
         })
         {
             X = 0,
