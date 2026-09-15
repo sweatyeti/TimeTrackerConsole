@@ -79,6 +79,18 @@ static void PrintInvalidTheme(string? themeName)
     AnsiConsole.MarkupLine($"[red bold]Unknown theme '{Markup.Escape(themeName ?? string.Empty)}'. Valid themes: {ConsoleTheme.ValidThemeList}.[/]");
 }
 
+// Names every entries/*.json file that could not be offered, with the reason. Skipped files are
+// never modified or removed by listing them - this is the only signal the user gets that a file
+// they expect is not in the list.
+static void ReportSkippedSessionFiles(SessionFileListing listing, ConsoleTheme theme)
+{
+    foreach(SkippedSessionFile skipped in listing.Skipped)
+    {
+        AnsiConsole.MarkupLine(
+            $"[{theme.ErrorMarkup}]Skipped {Markup.Escape(Path.GetFileName(skipped.FilePath))}: {Markup.Escape(skipped.Reason)}.[/]");
+    }
+}
+
 static int NewSession(string? name, int pageSize = 30, string? themeName = null, bool tui = false)
 {
     // validate the theme up front: an invalid value must fail before any session
@@ -139,13 +151,18 @@ static int ContinueSession(int pageSize = 30, string? themeName = null, bool tui
         return TuiSessionWindow.RunContinue(pageSize, theme);
     }
 
-    List<(SessionSnapshot Snapshot, string FilePath)> sessions = EntryStore.ListAllSessions();
+    SessionFileListing listing = EntryStore.ListAllSessions();
+    List<(SessionSnapshot Snapshot, string FilePath)> sessions = listing.Sessions;
 
     // tint the console for the whole continue flow (list + resumed session); the
     // finally block restores it on cancel, empty list, and any exit path
     ConsoleBackdrop.Apply(theme);
     try
     {
+        // A file that was skipped is named with the reason rather than silently missing from the
+        // list: "no previous sessions found" plus a file the user created is otherwise unexplainable.
+        ReportSkippedSessionFiles(listing, theme);
+
         if(sessions.Count == 0)
         {
             AnsiConsole.MarkupLine($"[{theme.ErrorMarkup}]No previous sessions found.[/]");

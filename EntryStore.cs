@@ -112,37 +112,60 @@ internal sealed class EntryStore
         await TryFlushAsync();
     }
 
-    // deserializes a SessionSnapshot from an existing file on disk; returns null on any error
-    public static SessionSnapshot? LoadSnapshot(string filePath)
+    // Deserializes a SessionSnapshot from an existing file on disk, reporting WHY a file could not
+    // be read rather than swallowing it: the reason is shown to the user by both continue screens
+    // when a file they expect is missing from the list.
+    public static bool TryLoadSnapshot(string filePath, out SessionSnapshot? snapshot, out string error)
     {
         try
         {
             string json = File.ReadAllText(filePath);
-            return JsonSerializer.Deserialize<SessionSnapshot>(json, JsonOptions);
+            snapshot = JsonSerializer.Deserialize<SessionSnapshot>(json, JsonOptions);
+            error = string.Empty;
+
+            return snapshot is not null;
         }
-        catch(Exception)
+        catch(Exception ex)
         {
-            return null;
+            // includes the deserializer's own complaint (bad JSON, a sessionId that is not a GUID)
+            snapshot = null;
+            error = ex.Message;
+
+            return false;
         }
     }
 
-    // enumerates all session files (newest-first) for the continue subcommand
-    public static List<(SessionSnapshot Snapshot, string FilePath)> ListAllSessions()
+    // Enumerates every session file (newest-first) for the continue subcommand.
+    //
+    // Listing is READ-ONLY: a file that cannot be offered is reported, never repaired, moved or
+    // deleted here. Only the normalization/validation in SnapshotNormalizer decides what can be
+    // offered, so this enumeration and the load paths cannot disagree about what is usable.
+    public static SessionFileListing ListAllSessions()
     {
-        string dir = Path.Combine(Directory.GetCurrentDirectory(), "entries");
-        if(!Directory.Exists(dir)) return new List<(SessionSnapshot Snapshot, string FilePath)>();
+        List<(SessionSnapshot Snapshot, string FilePath)> sessions = new();
+        List<SkippedSessionFile> skipped = new();
 
-        List<(SessionSnapshot Snapshot, string FilePath)> results = new();
+        string dir = Path.Combine(Directory.GetCurrentDirectory(), "entries");
+        if(!Directory.Exists(dir)) return new SessionFileListing(sessions, skipped);
+
         foreach(string file in Directory.EnumerateFiles(dir, "*.json"))
         {
-            SessionSnapshot? snap = LoadSnapshot(file);
-            if(snap is not null)
+            if(!TryLoadSnapshot(file, out SessionSnapshot? snap, out string error))
             {
-                results.Add((snap, file));
+                skipped.Add(new SkippedSessionFile(file, string.IsNullOrEmpty(error) ? "not readable as a session snapshot" : error));
+                continue;
             }
+
+            if(!SnapshotNormalizer.TryValidate(snap, out string reason))
+            {
+                skipped.Add(new SkippedSessionFile(file, reason));
+                continue;
+            }
+
+            sessions.Add((SnapshotNormalizer.Normalize(snap!), file));
         }
 
-        return results.OrderByDescending(x => x.Snapshot.StartedAt).ToList();
+        return new SessionFileListing(sessions.OrderByDescending(x => x.Snapshot.StartedAt).ToList(), skipped);
     }
 
     private async Task RunFlushLoopAsync()
@@ -286,6 +309,15 @@ internal sealed class EntryStore
         return chars;
     }
 }
+
+// what a caller learns from listing entries/*.json: the sessions that can be offered, and the
+// files that were skipped with a reason (shown to the user - a file silently missing from the
+// list is indistinguishable from one the user deleted)
+internal sealed record SessionFileListing(
+    List<(SessionSnapshot Snapshot, string FilePath)> Sessions,
+    List<SkippedSessionFile> Skipped);
+
+internal sealed record SkippedSessionFile(string FilePath, string Reason);
 
 // the shape of the file on disk - versioned, self-describing, and stable so the
 // future import feature can read these files back and identify the session from
