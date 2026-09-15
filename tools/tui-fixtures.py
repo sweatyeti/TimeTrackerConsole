@@ -11,6 +11,8 @@ so the shapes stay reviewable next to the assertions that depend on them:
   scale.json        45 entries / 44 completed task groups + 1 running entry (120x40 layout budget)
   unicode.json      CJK + emoji + combining-mark task/description
   long.json         a short first task, for the "type a wider task afterwards" check
+  complete.json     every entry complete -> the NOT ACTIVE banner (71-column art at 120 columns)
+  mixedcase.json    two unlogged entries whose task differs only in case (one task group)
   corrupt-null.json       deserializes, task/description null  (must be normalized, then offered)
   corrupt-missing.json    no "entries" key at all              (must be normalized to empty)
   corrupt-future.json     schemaVersion 99                     (must be skipped, with a reason)
@@ -80,6 +82,13 @@ def main():
         entry(1, "\u30bf\u30b9\u30af", "wide chars above", "2026-09-14T09:00:00",
               "2026-09-14T09:30:00"),
     ], "33333333-3333-3333-3333-333333333333")
+
+    # two unlogged entries whose task differs only in case: one task group, per the console path's
+    # own counting/matching rules (the console smoke harness asserts it)
+    fixtures["mixedcase.json"] = session("smoke-mixedcase", [
+        entry(2, "Weeding", "second casing", "2026-09-14T10:00:00", "2026-09-14T10:30:00"),
+        entry(1, "weeding", "first casing", "2026-09-14T09:00:00", "2026-09-14T09:30:00"),
+    ], "99999999-9999-9999-9999-999999999999", started="2026-09-14T11:00:00")
 
     fixtures["long.json"] = session("smoke-long", [
         entry(1, "a", "short", "2026-09-14T09:00:00"),

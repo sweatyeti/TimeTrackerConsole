@@ -103,7 +103,7 @@ EntryStore.cs      — On-disk store: 5s periodic flush, dirty flag, atomic writ
 TimeEntry.cs       — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete, IsDeleted)
 SnapshotNormalizer.cs — Snapshot repair/validation shared by every load path (null Entries/Task/Description, duplicate ids)
 Tui/               — Opt-in Terminal.Gui interface (`--tui`): window, layout, themed schemes, entry list, dialogs
-tools/             — tmux behavioural smoke harness for `--tui` (`tui-smoke.sh`) and its session fixtures
+tools/             — tmux behavioural smoke harnesses (`tui-smoke.sh`, `console-smoke.sh`) + fixtures
 TimeTrackerConsole.Tests/ — xunit tests for the shared logic, the snapshot normalizer and the pure TUI helpers
 ```
 
