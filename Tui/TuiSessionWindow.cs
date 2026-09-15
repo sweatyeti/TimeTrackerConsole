@@ -160,10 +160,10 @@ internal sealed class TuiSessionWindow
             SchemeName = _schemes.BaseName
         };
 
-        // the status bar is part of the rebuilt body, so it is added by BuildBody
+        // the status bar is added by BuildOnce and lives for the life of the window
         _statusBar = statusBar;
 
-        BuildBody();
+        BuildOnce();
 
         using(window)
         {
@@ -175,43 +175,46 @@ internal sealed class TuiSessionWindow
 
     private StatusBar? _statusBar;
 
-    // rebuilds every region from the LIVE session state. Called once when the window opens and
-    // again after every action, so the banner, summary, totals and entry list always show the
-    // entry set that was just mutated - the TUI equivalent of the Spectre loop's clear+redraw.
-    private void BuildBody()
+    // region fields: each region is built ONCE and lives for the life of the window. A refresh
+    // mutates these views and their data sources in place (see Refresh) rather than tearing the
+    // tree down and rebuilding it - which is the documented update path: SetNeedsDraw for content
+    // changes, SetNeedsLayout when geometry changes. Recreating views instead discards per-view
+    // state (focus, scroll offset, adornments, key bindings) and forced the workarounds this
+    // refactor removes.
+    private Label? _banner;
+    private TableView? _summary;
+    private Label? _totals;
+    private ListView? _entries;
+    private EntryListDataSource? _entrySource;
+    private SummaryTableSource? _summarySource;
+
+    // builds every region once, then hands over to Refresh for the first paint
+    private void BuildOnce()
     {
         if(_window is null) return;
 
-        foreach(View view in _window.RemoveAll())
-        {
-            view.Dispose();
-        }
+        string art = Session.BuildActiveStateArt("ACTIVE", letterGap: 3, wordGap: 5);
 
-        bool isActive = _session.IsActive;
-        // a wider letter/word gap than the Spectre art, so the banner reads as a banner in a
-        // full-width window rather than a narrow strip pinned to the left
-        string art = Session.BuildActiveStateArt(isActive ? "ACTIVE" : "NOT ACTIVE", letterGap: 3, wordGap: 5);
-
-        Label banner = new()
+        _banner = new Label
         {
             X = 0,
             Y = 0,
             Width = Dim.Fill(),
             Height = ArtHeightInLines(art),
             Text = art,
-            TextAlignment = Alignment.Center,
-            SchemeName = isActive ? _schemes.BannerActiveName : _schemes.BannerInactiveName
+            TextAlignment = Alignment.Center
         };
-        _window.Add(banner);
+        _window.Add(_banner);
 
-        View previous = banner;
-
-        // the Spectre path skips the whole summary section when there are no entries
-        if(_session.EntryCount > 0)
+        _summarySource = new SummaryTableSource(_session.VisibleEntriesOldestFirst, _schemes);
+        _summary = new TableView
         {
-            SummaryTableSource summarySource = new(_session.VisibleEntriesOldestFirst, _schemes);
-
-            TableStyle summaryStyle = new()
+            X = 0,
+            Y = Pos.Bottom(_banner) + 1,
+            Width = Dim.Fill(),
+            Height = 1, // height AND visibility are both settled by the first Refresh
+            Table = _summarySource,
+            Style = new TableStyle
             {
                 ShowHeaders = true,
                 ShowHorizontalHeaderOverline = false,
@@ -220,62 +223,40 @@ internal sealed class TuiSessionWindow
                 ShowVerticalCellLines = true,
                 ExpandLastColumn = false,
                 HeaderScheme = _schemes.SummaryHeaderScheme,
-                RowColorGetter = summarySource.RowColorGetter
-            };
+                RowColorGetter = _summarySource.RowColorGetter
+            },
+            SchemeName = _schemes.BaseName
+        };
+        _window.Add(_summary);
 
-            TableView summary = new()
-            {
-                X = 0,
-                Y = Pos.Bottom(previous) + 1,
-                Width = Dim.Fill(),
-                Height = summaryStyle.ShowHeaders
-                    ? summarySource.Rows + 3 // header row + header rule + bottom line
-                    : summarySource.Rows + 1,
-                Table = summarySource,
-                Style = summaryStyle,
-                SchemeName = _schemes.BaseName
-            };
-            _window.Add(summary);
-            previous = summary;
-
-            Label totals = new()
-            {
-                X = 0,
-                Y = Pos.Bottom(previous) + 1,
-                Width = Dim.Fill(),
-                Height = 1,
-                Text = $"Total unlogged task time: {FormatMinutes(summarySource.TotalUnloggedMins)}    Total time: {FormatMinutes(summarySource.TotalTotalMins)}",
-                SchemeName = _schemes.TotalsName
-            };
-            _window.Add(totals);
-            previous = totals;
-        }
-
-        TimeEntry[] visible = _session.VisibleEntriesNewestFirst.ToArray();
-        EntryListDataSource entrySource = new(visible, _schemes);
-        ListView entries = new()
+        _totals = new Label
         {
             X = 0,
-            Y = Pos.Bottom(previous) + 1,
+            Y = Pos.Bottom(_summary) + 1,
+            Width = Dim.Fill(),
+            Height = 1
+        };
+        _window.Add(_totals);
+
+        _entrySource = new EntryListDataSource(_session.VisibleEntriesNewestFirst, _schemes);
+        _entries = new ListView
+        {
+            X = 0,
+            Y = Pos.Bottom(_totals) + 1,
             Width = Dim.Fill(),
             Height = Dim.Fill(1),
-            Source = entrySource,
+            Source = _entrySource,
             SchemeName = _schemes.BaseName
         };
 
         // Enter on the entry list opens the update flow - the same entry the Spectre menu
         // selection opens (its list order is newest-first, like DisplayMainMenu's choices)
-        entries.Accepting += (_, args) =>
+        _entries.Accepting += (_, args) =>
         {
             args.Handled = true;
-            UpdateSelectedEntry(entries.SelectedItem ?? -1);
+            UpdateSelectedEntry(_entries.SelectedItem ?? -1);
         };
-
-        if(entrySource.Count > 0)
-        {
-            entries.SelectedItem = RestoredSelectionIndex(visible);
-        }
-        _window.Add(entries);
+        _window.Add(_entries);
 
         if(_statusBar is not null)
         {
@@ -283,7 +264,11 @@ internal sealed class TuiSessionWindow
             _window.Add(_statusBar);
         }
 
-        entries.SetFocus();
+        // focus is set once, here. The framework restores it after a dialog closes, so a refresh
+        // must not re-assert it - that was one of the workarounds the teardown-and-rebuild forced.
+        _entries.SetFocus();
+
+        Refresh();
     }
 
     // the art is a fixed 5-row block; deriving the height from the string keeps the glyph
@@ -464,10 +449,52 @@ internal sealed class TuiSessionWindow
     }
 
     // redraw every region from the mutated session state (the TUI's clear+repaint)
+    // pushes the live session state into the long-lived views. Called once when the window opens
+    // and again after every action, so the banner, summary, totals and entry list always show the
+    // entry set that was just mutated - the TUI equivalent of the Spectre loop's clear+redraw.
     private void Refresh()
     {
-        BuildBody();
-        _window?.SetNeedsLayout();
-        _window?.SetNeedsDraw();
+        if(_window is null || _banner is null || _summary is null || _totals is null
+            || _entries is null || _entrySource is null || _summarySource is null)
+        {
+            return;
+        }
+
+        bool isActive = _session.IsActive;
+        // a wider letter/word gap than the Spectre art, so the banner reads as a banner in a
+        // full-width window rather than a narrow strip pinned to the left
+        _banner.Text = Session.BuildActiveStateArt(isActive ? "ACTIVE" : "NOT ACTIVE", letterGap: 3, wordGap: 5);
+        _banner.SchemeName = isActive ? _schemes.BannerActiveName : _schemes.BannerInactiveName;
+
+        // the Spectre path skips the whole summary section when there are no entries. An invisible
+        // view still occupies layout space, so the height has to collapse as well or the entry
+        // list would sit behind a blank block.
+        bool showSummary = _session.EntryCount > 0;
+        bool summaryWasVisible = _summary.Visible;
+
+        _summarySource.Update(_session.VisibleEntriesOldestFirst);
+        _summary.Height = showSummary ? _summarySource.Rows + 3 // header row + header rule + bottom line
+                                      : 0;
+        _summary.Visible = showSummary;
+
+        _totals.Text = $"Total unlogged task time: {FormatMinutes(_summarySource.TotalUnloggedMins)}    Total time: {FormatMinutes(_summarySource.TotalTotalMins)}";
+        _totals.Height = showSummary ? 1 : 0;
+        _totals.Visible = showSummary;
+
+        _entrySource.Update(_session.VisibleEntriesNewestFirst);
+
+        // keep the highlight on the same entry where possible; a new entry (which sorts to the
+        // top) falls back to the first row, as DisplayMainMenu does. Only re-applied when it is
+        // actually different, so a refresh cannot fight the user's own navigation.
+        if(_entrySource.Count > 0)
+        {
+            int target = RestoredSelectionIndex(_session.VisibleEntriesNewestFirst);
+            if(_entries.SelectedItem != target) _entries.SelectedItem = target;
+        }
+
+        _window.SetNeedsDraw();
+
+        // only the summary toggle changes geometry; everything else is a content change
+        if(showSummary != summaryWasVisible) _window.SetNeedsLayout();
     }
 }

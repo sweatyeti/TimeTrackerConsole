@@ -26,6 +26,16 @@ internal sealed class SummaryTableSource : ITableSource
     {
         _plainScheme = schemes.SummaryRowScheme(false);
         _unloggedScheme = schemes.SummaryRowScheme(true);
+        Update(entries);
+    }
+
+    // Rebuilds the rows and both totals in place - the view is long-lived and only its contents
+    // change, so a refresh mutates this source rather than constructing a new one.
+    public void Update(IEnumerable<TimeEntry> entries)
+    {
+        _rows.Clear();
+        TotalUnloggedMins = 0;
+        TotalTotalMins = 0;
 
         var taskQuery =
             from entry in entries
@@ -59,9 +69,9 @@ internal sealed class SummaryTableSource : ITableSource
         }
     }
 
-    public double TotalUnloggedMins { get; }
+    public double TotalUnloggedMins { get; private set; }
 
-    public double TotalTotalMins { get; }
+    public double TotalTotalMins { get; private set; }
 
     public string[] ColumnNames => HeaderNames;
 
