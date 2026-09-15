@@ -19,8 +19,18 @@ using Attribute = Terminal.Gui.Drawing.Attribute;
 internal sealed class EntryListDataSource : IListDataSource
 {
     private readonly List<EntryRow> _rows = new();
+    private readonly TuiSchemes _schemes;
 
     public EntryListDataSource(IEnumerable<TimeEntry> entriesNewestFirst, TuiSchemes schemes)
+    {
+        _schemes = schemes;
+        Update(entriesNewestFirst);
+    }
+
+    // Rebuilds the rows in place and notifies the ListView. This is the documented refresh path
+    // for IListDataSource: the view is long-lived, only its contents change, and the implementor
+    // is responsible for raising CollectionChanged when the underlying data changes.
+    public void Update(IEnumerable<TimeEntry> entriesNewestFirst)
     {
         List<TimeEntry> entries = entriesNewestFirst.Where(entry => !entry.IsDeleted).ToList();
 
@@ -37,10 +47,13 @@ internal sealed class EntryListDataSource : IListDataSource
             .DefaultIfEmpty(0)
             .Max();
 
+        _rows.Clear();
         foreach(TimeEntry entry in entries)
         {
-            _rows.Add(BuildRow(entry, idWidth, taskWidth, timeWidth, schemes));
+            _rows.Add(BuildRow(entry, idWidth, taskWidth, timeWidth, _schemes));
         }
+
+        RaiseCollectionChanged();
     }
 
     public int Count => _rows.Count;
@@ -49,8 +62,8 @@ internal sealed class EntryListDataSource : IListDataSource
 
     public bool SuspendCollectionChangedEvent { get; set; }
 
-    // Phase 1 is read-only, so the rows never change after construction; the event is
-    // part of the IListDataSource contract and is only raised by a future refresh
+    // raised by Update so the ListView repaints; the IListDataSource contract expects the
+    // implementor to notify when the underlying data changes
     public event NotifyCollectionChangedEventHandler? CollectionChanged;
 
     public void RaiseCollectionChanged()
@@ -79,10 +92,13 @@ internal sealed class EntryListDataSource : IListDataSource
         EntryRow entryRow = _rows[item];
 
         // The selected row paints on the list's Focus background, so BOTH the background and the
-        // foreground come from that role. Keeping the segment's own foreground put
-        // white-on-cyan for "current" and made the selected row unreadable; the Spectre path
-        // likewise lets its selection highlight mask the row's own colours.
-        Attribute selectedAttribute = listView.GetAttributeForRole(Terminal.Gui.Drawing.VisualRole.Focus);
+        // foreground come from that role. IListDataSource.Render documents that the scheme is
+        // already set for the selection state before this is called, and the framework picks
+        // Focus only while the list actually has focus - otherwise Active. Keeping the segment's
+        // own foreground put white-on-cyan for "current" and made the selected row unreadable;
+        // the Spectre path likewise lets its selection highlight mask the row's own colours.
+        Attribute selectedAttribute = listView.GetAttributeForRole(
+            listView.HasFocus ? Terminal.Gui.Drawing.VisualRole.Focus : Terminal.Gui.Drawing.VisualRole.Active);
 
         foreach(RowSegment segment in entryRow.Segments)
         {
