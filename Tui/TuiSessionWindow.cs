@@ -128,6 +128,9 @@ internal sealed class TuiSessionWindow
         return labels;
     }
 
+    // Esc on the main window is intentionally inert - see the status bar in RunWindow
+    private static void NoOp() { }
+
     private void RunWindow()
     {
         Window window = new()
@@ -139,9 +142,26 @@ internal sealed class TuiSessionWindow
         };
         _window = window;
 
+        // Esc must do NOTHING on the main window (user decision). Terminal.Gui's default Esc
+        // binding is Command.Quit, which stops the topmost runnable - exactly right inside a
+        // dialog (that IS the mechanism that cancels one) and exactly wrong here. Three
+        // approaches that do NOT work, all verified: a window-level `Command.NotBound` binding
+        // does not consume the key; an invisible (`Visible = false`) shortcut is skipped by input
+        // routing; and removing the framework's Command.Quit default takes Esc away from every
+        // dialog too. A VISIBLE bound shortcut does consume it, so Esc gets one with an empty
+        // action, zero width so it renders nothing while still taking part in input. It lives in
+        // the status bar because the action shortcuts there are the ones that reliably receive
+        // keys, and because BuildBody rebuilds (and disposes) every window child on each action.
+        Shortcut escSwallow = new(Key.Esc, string.Empty, NoOp, null)
+        {
+            Width = 0,
+            Height = 0
+        };
+
         // F2..F6 are the admin options of the Spectre main menu, in the same order and with the
-        // same behavior; Esc quits via the runnable's own default key (and by clicking the
-        // shortcut), which leaves the session unfinished exactly like Ctrl+C on the Spectre path
+        // same behavior. Esc is deliberately NOT bound here: on the main window Esc does nothing
+        // (user decision - it is far too easy to hit by accident while moving around the list),
+        // while inside a dialog Esc still cancels that dialog. F6 is the way out.
         StatusBar statusBar = new(new List<Shortcut>
         {
             new(Key.F2, "Stop/start", StartOrStopEntry, null) { BindKeyToApplication = true },
@@ -149,7 +169,7 @@ internal sealed class TuiSessionWindow
             new(Key.F4, "Deleted", ViewDeletedFlow, null) { BindKeyToApplication = true },
             new(Key.F5, "Stop tracking", StopTracking, null) { BindKeyToApplication = true },
             new(Key.F6, "Stop+exit", StopAndExit, null) { BindKeyToApplication = true },
-            new(Key.Esc, "Quit", RequestExit, null)
+            escSwallow
         })
         {
             X = 0,
@@ -451,32 +471,8 @@ internal sealed class TuiSessionWindow
         ExitNow();
     }
 
-    // Esc quits WITHOUT ending the session (it stays open for `continue`), and it is easy to
-    // hit by accident, so it asks first. F6 ("Stop+exit") is a deliberate two-part action and
-    // stays direct - it is the normal way to close out a session.
-    private void RequestExit()
-    {
-        if(_exitRequested || !MainWindowIsTop) return;
-
-        // The confirm has to run after this key event finishes unwinding. Opening the dialog
-        // inline let the very same Esc that triggered it cancel the dialog immediately, so Esc
-        // looked like it did nothing at all.
-        _app.Invoke(() =>
-        {
-            if(_exitRequested || !MainWindowIsTop) return;
-
-            if(!EntryDialogs.Confirm(_app, "Quit",
-                "Exit TimeTracker? This session stays open and can be resumed with 'continue'.",
-                "Quit", "Keep working", defaultIsAffirmative: false))
-            {
-                return;
-            }
-
-            ExitNow();
-        });
-    }
-
-    // the actual unwind, shared by both exit paths once they have decided to go
+    // The single exit path. F6 ("Stop+exit") ends the session and then leaves; Esc no longer
+    // quits at all, so there is no second caller and nothing left to confirm.
     private void ExitNow()
     {
         if(_exitRequested) return;
