@@ -9,7 +9,8 @@ so the shapes stay reviewable next to the assertions that depend on them:
   basic.json        4 entries, newest-first 4(active) 3 2 1 - the fixture the review handoff uses,
                     with the in-progress entry at the HIGHEST id
   scale.json        45 entries / 44 completed task groups + 1 running entry (120x40 layout budget)
-  unicode.json      CJK + emoji + combining-mark task/description
+  unicode.json      CJK + emoji + combining-mark values in the task and in the description, plus one
+                    ASCII-only control row (the alignment assertion compares the wide rows against it)
   complete.json     every entry complete -> the NOT ACTIVE banner (71-column art at 120 columns)
   mixedcase.json    two unlogged entries whose task differs only in case (one task group)
   corrupt-null.json       deserializes, task/description null  (must be normalized, then offered)
@@ -78,11 +79,17 @@ def main():
                            logged=(index % 2 == 0)))
     fixtures["scale.json"] = session("smoke-scale", scale, "22222222-2222-2222-2222-222222222222")
 
+    # CJK / emoji / combining-mark values in BOTH the task and the description column, plus one
+    # ASCII-only row as the control the alignment assertion compares the wide rows against (a wide
+    # row must put its separators in the same columns as the ASCII row). The in-progress entry keeps
+    # the highest id, as in every other fixture.
     fixtures["unicode.json"] = session("smoke-unicode", [
-        entry(2, "\u8a08\u753b\u30ec\u30d3\u30e5\u30fc", "caf\u00e9 e\u0301 \U0001f680 done",
-              "2026-09-14T10:00:00"),
-        entry(1, "\u30bf\u30b9\u30af", "wide chars above", "2026-09-14T09:00:00",
-              "2026-09-14T09:30:00"),
+        entry(3, "\U0001f680 \u8a08\u753b", "caf\u00e9 e\u0301 \U0001f680 done",
+              "2026-09-14T11:00:00"),
+        entry(2, "\u8a08\u753b\u30ec\u30d3\u30e5\u30fc", "\u30bf\u30b9\u30af\u306e\u8aac\u660e",
+              "2026-09-14T10:00:00", "2026-09-14T10:30:00"),
+        entry(1, "wide-chars", "plain ascii control", "2026-09-14T09:00:00",
+              "2026-09-14T09:30:00", logged=True),
     ], "33333333-3333-3333-3333-333333333333")
 
     # two unlogged entries whose task differs only in case: one task group, per the console path's
