@@ -10,7 +10,6 @@ so the shapes stay reviewable next to the assertions that depend on them:
                     with the in-progress entry at the HIGHEST id
   scale.json        45 entries / 44 completed task groups + 1 running entry (120x40 layout budget)
   unicode.json      CJK + emoji + combining-mark task/description
-  long.json         a short first task, for the "type a wider task afterwards" check
   complete.json     every entry complete -> the NOT ACTIVE banner (71-column art at 120 columns)
   mixedcase.json    two unlogged entries whose task differs only in case (one task group)
   corrupt-null.json       deserializes, task/description null  (must be normalized, then offered)
@@ -90,12 +89,6 @@ def main():
         entry(1, "weeding", "first casing", "2026-09-14T09:00:00", "2026-09-14T09:30:00"),
     ], "99999999-9999-9999-9999-999999999999", started="2026-09-14T11:00:00")
 
-    fixtures["long.json"] = session("smoke-long", [
-        entry(1, "a", "short", "2026-09-14T09:00:00"),
-    ], "44444444-4444-4444-4444-444444444444")
-
-    # every entry complete -> the NOT ACTIVE banner, whose block art is 71 columns wide at the TUI's
-    # wide spacing (the narrow-terminal scenario needs a banner that has to be shrunk to fit)
     fixtures["complete.json"] = session("smoke-complete", [
         entry(2, "planning", "weekly review", "2026-09-14T10:00:00", "2026-09-14T10:30:00"),
         entry(1, "weeding", "back bed", "2026-09-14T09:00:00", "2026-09-14T09:30:00", logged=True),
