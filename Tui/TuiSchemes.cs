@@ -130,6 +130,13 @@ internal sealed class TuiSchemes
         TotalsScheme = new Scheme(baseScheme) { Normal = Totals };
         PromptScheme = new Scheme(baseScheme) { Normal = Prompt };
 
+        CellPlainScheme = new Scheme(baseScheme) { Normal = Plain };
+        CellSecondaryScheme = new Scheme(baseScheme) { Normal = Secondary };
+        CellMutedScheme = new Scheme(baseScheme) { Normal = Muted };
+        CellPositiveScheme = new Scheme(baseScheme) { Normal = Positive };
+        CellUnloggedScheme = new Scheme(baseScheme) { Normal = Unlogged };
+        CellInProgressScheme = new Scheme(baseScheme) { Normal = InProgress };
+
         Register(BaseName, baseScheme);
         Register(BannerActiveName, BannerActiveScheme);
         Register(BannerInactiveName, BannerInactiveScheme);
@@ -176,6 +183,16 @@ internal sealed class TuiSchemes
 
     // the per-row scheme for the summary table: a named task that still has unlogged minutes
     // gets the unlogged emphasis, everything else stays on the base scheme
+    // Cell schemes for the entry table: TableView's ColumnStyle.ColorGetter hands back a Scheme per
+    // cell, so every colour role the rows use needs a Scheme instance. Same construction the
+    // summary row schemes already use.
+    public Scheme CellPlainScheme { get; }
+    public Scheme CellSecondaryScheme { get; }
+    public Scheme CellMutedScheme { get; }
+    public Scheme CellPositiveScheme { get; }
+    public Scheme CellUnloggedScheme { get; }
+    public Scheme CellInProgressScheme { get; }
+
     public Scheme SummaryRowScheme(bool highlightUnlogged) => highlightUnlogged ? _summaryUnloggedScheme : _summaryPlainScheme;
 
     private static void Register(string name, Scheme scheme)
