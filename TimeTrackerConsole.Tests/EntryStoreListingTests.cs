@@ -56,6 +56,59 @@ public class EntryStoreListingTests
     }
 
     [Fact]
+    public void Listing_RefusesAMissingOrZeroSchemaVersion_WithAReason()
+    {
+        using IDisposable scope = TestHarness.IsolatedEntries(out string entries);
+
+        string readable = WriteFile(entries, "good", ValidSessionJson("good"));
+
+        // no schemaVersion key at all: deserializes with SchemaVersion 0
+        string noSchemaKey = WriteFile(entries, "noschema", """
+        {
+          "sessionId": "44444444-4444-4444-4444-444444444444",
+          "name": "no schema key",
+          "startedAt": "2026-09-14T09:00:00",
+          "endedAt": null,
+          "entries": []
+        }
+        """);
+
+        // an explicit 0 is indistinguishable from a missing key once deserialized, and is refused too
+        string zeroSchema = WriteFile(entries, "zero", ValidSessionJson("zero").Replace("\"schemaVersion\": 2", "\"schemaVersion\": 0"));
+        string negativeSchema = WriteFile(entries, "negative", ValidSessionJson("negative").Replace("\"schemaVersion\": 2", "\"schemaVersion\": -1"));
+
+        SessionFileListing listing = EntryStore.ListAllSessions();
+
+        Assert.Equal(readable, Assert.Single(listing.Sessions).FilePath);
+
+        Assert.Equal(3, listing.Skipped.Count);
+        Assert.Single(listing.Skipped, skipped => skipped.FilePath == noSchemaKey && skipped.Reason.Contains("missing", StringComparison.OrdinalIgnoreCase));
+        Assert.Single(listing.Skipped, skipped => skipped.FilePath == zeroSchema);
+        Assert.Single(listing.Skipped, skipped => skipped.FilePath == negativeSchema);
+
+        // listing still never repairs, moves or deletes what it refuses
+        Assert.True(File.Exists(noSchemaKey));
+        Assert.True(File.Exists(zeroSchema));
+        Assert.True(File.Exists(negativeSchema));
+    }
+
+    [Fact]
+    public void Listing_StillOffersEverySupportedSchemaVersion()
+    {
+        using IDisposable scope = TestHarness.IsolatedEntries(out string entries);
+
+        // the boundary the new range must not break: v1 (legacy, no isDeleted semantics) and v2 both stay
+        // offerable, so the range check only rejects what is genuinely outside the documented formats
+        WriteFile(entries, "v1", ValidSessionJson("v1").Replace("\"schemaVersion\": 2", "\"schemaVersion\": 1"));
+        WriteFile(entries, "v2", ValidSessionJson("v2"));
+
+        SessionFileListing listing = EntryStore.ListAllSessions();
+
+        Assert.Equal(2, listing.Sessions.Count);
+        Assert.Empty(listing.Skipped);
+    }
+
+    [Fact]
     public void Listing_NormalizesWhatItOffers()
     {
         using IDisposable scope = TestHarness.IsolatedEntries(out string entries);

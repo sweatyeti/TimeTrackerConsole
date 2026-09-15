@@ -104,8 +104,71 @@ public class SnapshotNormalizerTests
     public void TryValidate_AcceptsLegacyAndCurrentSchema()
     {
         // v1 files predate isDeleted; they are still readable (the record default is false)
+        Assert.Equal(1, SnapshotNormalizer.OldestSupportedSchemaVersion);
         Assert.True(SnapshotNormalizer.TryValidate(TestHarness.Snapshot(new(), schemaVersion: 1), out _));
         Assert.True(SnapshotNormalizer.TryValidate(TestHarness.Snapshot(new()), out _));
+    }
+
+    [Fact]
+    public void TryValidate_RefusesAnAbsentSchemaVersionWithAnActionableReason()
+    {
+        // A missing key deserializes to 0. The documented formats are v1/v2, so 0 is not an older
+        // format we understand - it is a file this build cannot promise to render.
+        bool valid = SnapshotNormalizer.TryValidate(TestHarness.Snapshot(new(), schemaVersion: 0), out string reason);
+
+        Assert.False(valid);
+        Assert.Contains("schema version 0", reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("missing", reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1..2", reason);
+    }
+
+    [Fact]
+    public void TryValidate_RefusesANegativeSchemaVersion()
+    {
+        bool valid = SnapshotNormalizer.TryValidate(TestHarness.Snapshot(new(), schemaVersion: -1), out string reason);
+
+        Assert.False(valid);
+        Assert.Contains("schema version -1", reason);
+    }
+
+    [Fact]
+    public void TryValidate_BoundsTheAcceptedRangeAtBothEnds()
+    {
+        // the range is inclusive: oldest .. current accepted, one step outside either end refused
+        Assert.True(SnapshotNormalizer.TryValidate(
+            TestHarness.Snapshot(new(), schemaVersion: SnapshotNormalizer.OldestSupportedSchemaVersion), out _));
+        Assert.True(SnapshotNormalizer.TryValidate(
+            TestHarness.Snapshot(new(), schemaVersion: EntryStore.SchemaVersion), out _));
+
+        Assert.False(SnapshotNormalizer.TryValidate(
+            TestHarness.Snapshot(new(), schemaVersion: SnapshotNormalizer.OldestSupportedSchemaVersion - 1), out _));
+        Assert.False(SnapshotNormalizer.TryValidate(
+            TestHarness.Snapshot(new(), schemaVersion: EntryStore.SchemaVersion + 1), out _));
+    }
+
+    [Fact]
+    public void AFileWithoutASchemaVersionKey_ReadsAsZeroAndIsRefused()
+    {
+        // the end-to-end shape of the finding: the missing key silently deserializes to 0, so the
+        // validator has to be the thing that refuses it (nothing else in the pipeline would).
+        string path = TestHarness.ScratchSessionPath("missing-schema-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(path, """
+        {
+          "sessionId": "11111111-1111-1111-1111-111111111111",
+          "name": "no schema key",
+          "startedAt": "2026-09-14T08:00:00",
+          "endedAt": null,
+          "entries": []
+        }
+        """);
+
+        Assert.True(EntryStore.TryLoadSnapshot(path, out SessionSnapshot? snapshot, out string error));
+        Assert.Empty(error);
+        Assert.NotNull(snapshot);
+        Assert.Equal(0, snapshot!.SchemaVersion);
+
+        Assert.False(SnapshotNormalizer.TryValidate(snapshot, out string reason));
+        Assert.Contains("missing", reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

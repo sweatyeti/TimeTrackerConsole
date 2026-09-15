@@ -67,6 +67,7 @@ Sessions are written to `entries/` as JSON — one file per session — by a bac
 - **Write cadence:** dirty-flag + background timer flushes every 5 seconds; a final flush runs on graceful exit
 - **Atomic writes:** each flush writes `<file>.tmp` then renames over the final file, so a crash never leaves a half-written session file
 - **Schema:** self-describing envelope — `schemaVersion`, `sessionId`, `name`, `startedAt`, `endedAt`, `entries[]` — robust to renames and future imports
+- **Readable schema versions:** 1 and 2. A file whose `schemaVersion` is newer than this build, or missing/`0`/negative, is not offered by `continue`; it is named with the reason and left on disk untouched
 
 ### Example `entries/<session>.json`
 

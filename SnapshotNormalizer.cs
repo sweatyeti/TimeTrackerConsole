@@ -19,14 +19,23 @@ internal static class SnapshotNormalizer
     // rule StartNewEntryWithTask and ApplyEntryUpdate already apply to live input).
     internal const string NoTaskName = "none";
 
+    // The oldest on-disk format this build reads. v1 predates isDeleted (the record default is false),
+    // which is exactly the legacy behavior the validator has to keep accepting. A schemaVersion below
+    // this - including 0, which is what a file with the key missing OR explicitly set to 0 deserializes
+    // to - describes a format this build cannot promise to render, so it is refused rather than offered.
+    internal const int OldestSupportedSchemaVersion = 1;
+
     // Semantic validation, not JSON validation (a file that is not JSON at all is already rejected
     // by the deserializer). Only content the app cannot represent is refused here, so that
     // ListAllSessions cannot offer a session that the renderers would then choke on.
     //
-    // A null snapshot = the deserializer refused the file; a newer schemaVersion = a file written by
-    // a future version, whose unknown semantics this build cannot promise to render. Everything else
-    // that deserializes is repaired by Normalize: repairing is reversible (the file is untouched
-    // until the user resumes it, and the user's own file is never rewritten by a listing).
+    // A null snapshot = the deserializer refused the file. A schemaVersion outside
+    // [OldestSupportedSchemaVersion, EntryStore.SchemaVersion] = a file whose semantics this build
+    // cannot promise to render: > current is a future format, < oldest is an absent (missing key ->
+    // 0) or unsupported-old format. Offering one of those would also mean persisting it as a usable
+    // session on the next flush. Everything else that deserializes is repaired by Normalize:
+    // repairing is reversible (the file is untouched until the user resumes it, and the user's own
+    // file is never rewritten by a listing).
     internal static bool TryValidate(SessionSnapshot? snapshot, out string reason)
     {
         if(snapshot is null)
@@ -38,6 +47,12 @@ internal static class SnapshotNormalizer
         if(snapshot.SchemaVersion > EntryStore.SchemaVersion)
         {
             reason = $"schema version {snapshot.SchemaVersion} is newer than this build supports ({EntryStore.SchemaVersion})";
+            return false;
+        }
+
+        if(snapshot.SchemaVersion < OldestSupportedSchemaVersion)
+        {
+            reason = $"schema version {snapshot.SchemaVersion} is not supported (a missing schemaVersion reads as 0); this build reads schema versions {OldestSupportedSchemaVersion}..{EntryStore.SchemaVersion}";
             return false;
         }
 
@@ -54,10 +69,11 @@ internal static class SnapshotNormalizer
     // Duplicate ids are collapsed to one entry (last occurrence wins) so the id -> entry dictionary
     // the session builds cannot silently lose a different entry per reader.
     //
-    // Nothing here invents data for a field that is merely absent: a missing schemaVersion stays 0
-    // and a missing startTime stays the default DateTime, exactly as before. An entry that exists
-    // but carries no task is the one case that gets a value, because "none" is what the app itself
-    // stores for an entry with no task.
+    // Nothing here invents data for a field that is merely absent: a missing startTime stays the
+    // default DateTime, exactly as before. (A missing schemaVersion also stays 0, but such a file is
+    // refused by TryValidate before Normalize ever sees it - Normalize never turns an unsupported
+    // format into an offerable one.) An entry that exists but carries no task is the one case that
+    // gets a value, because "none" is what the app itself stores for an entry with no task.
     internal static SessionSnapshot Normalize(SessionSnapshot snapshot) => snapshot with
     {
         Name = string.IsNullOrWhiteSpace(snapshot.Name) ? UnnamedSessionName : snapshot.Name,
