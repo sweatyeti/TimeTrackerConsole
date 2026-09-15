@@ -48,7 +48,7 @@ On the default interface the tinting uses `OSC 11`/`OSC 10` to set and `OSC 111`
 
 Single combined menu: summary table (task groups with counts/time) + admin/entry selector. In-progress entries highlighted green. A task's unlogged time is highlighted red in the summary. Logged/unlogged status shown.
 
-The Terminal.Gui interface renders the same banner, summary, totals and entry list; its admin options are function keys F2–F6 with the same order and behavior as the console menu, and Esc quits.
+The Terminal.Gui interface renders the same banner, summary, totals and entry list; its admin options are function keys F2–F6 with the same order and behavior as the console menu, and `Enter` on a row opens the update flow. Esc is inert in the main window (F6 stops tracking and exits); dialogs use Esc to cancel.
 
 ## Actions
 
@@ -101,7 +101,10 @@ ConsoleTheme.cs    — Presentation theme role tables (`current`, `anime`, `anim
 ConsoleBackdrop.cs — Applies/restores the theme's terminal default colours (OSC 10/11); default interface only
 EntryStore.cs      — On-disk store: 5s periodic flush, dirty flag, atomic writes
 TimeEntry.cs       — Data model (Id, StartTime, EndTime, Task, Description, Logged, IsComplete, IsDeleted)
+SnapshotNormalizer.cs — Snapshot repair/validation shared by every load path (null Entries/Task/Description, duplicate ids)
 Tui/               — Opt-in Terminal.Gui interface (`--tui`): window, layout, themed schemes, entry list, dialogs
+tools/             — tmux behavioural smoke harness for `--tui` (`tui-smoke.sh`) and its session fixtures
+TimeTrackerConsole.Tests/ — xunit tests for the shared logic, the snapshot normalizer and the pure TUI helpers
 ```
 
 ## Design Note
