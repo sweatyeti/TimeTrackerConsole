@@ -22,6 +22,7 @@ set -uo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 DLL="$REPO_ROOT/bin/Debug/net10.0/TimeTrackerConsole.dll"
 FIXTURES="$REPO_ROOT/tools/tui-fixtures.py"
+FRAME_CHECKER="$REPO_ROOT/tools/tui-frame.py"
 
 # Point the harness at a pre-built DLL instead (e.g. a baseline worktree build, to show which checks
 # a change actually fixes): TTC_SMOKE_DLL=/tmp/ttc-baseline/bin/Debug/net10.0/TimeTrackerConsole.dll
@@ -141,6 +142,24 @@ no_exception() { # name file
 		fail "$1 - frame contains an exception"
 	else
 		pass "$1"
+	fi
+}
+
+# Display-column alignment: every row of every table in the frame must put its column separators in
+# the same columns. Measured in characters rather than columns, a row containing wide (CJK/emoji) text
+# always *looks* shifted against an ASCII row even when the terminal shows them aligned, so the
+# assertion works on display columns (see tools/tui-frame.py). As with every other check here, a
+# missing frame is a failure: alignment cannot be proven from a frame that was never captured.
+check_alignment() { # name frame required-table-blocks
+	local name="$1" frame="$2" blocks="${3:-2}" output
+	if [ ! -f "$frame" ]; then
+		fail "$name - no captured frame at $frame"
+		return
+	fi
+	if output=$(python3 "$FRAME_CHECKER" align "$frame" --require-blocks "$blocks" 2>&1); then
+		pass "$name - $(echo "$output" | tail -1 | sed 's/^ *//')"
+	else
+		fail "$name - $(echo "$output" | grep -E 'MISALIGNED|expected|only ' | head -3 | tr '\n' ' ')"
 	fi
 }
 
@@ -397,7 +416,7 @@ scenario_narrow() {
 }
 
 scenario_unicode() {
-	echo "scenario: CJK / emoji / combining-mark task and description render (observed behaviour)"
+	echo "scenario: CJK / emoji / combining-mark task and description render, and the columns line up"
 	local dir="$SCRATCH/unicode" ; mkdir -p "$dir/entries"
 	python3 "$FIXTURES" "$dir/entries" unicode > /dev/null
 
@@ -408,11 +427,31 @@ scenario_unicode() {
 	frame unicode "$SCRATCH/unicode-frame.txt"
 
 	contains "unicode: the CJK task renders" "$SCRATCH/unicode-frame.txt" "計画レビュー"
+	contains "unicode: the CJK description renders" "$SCRATCH/unicode-frame.txt" "タスクの説明"
+	contains "unicode: the emoji task renders" "$SCRATCH/unicode-frame.txt" "🚀 計画"
+	contains "unicode: the combining-mark description renders" "$SCRATCH/unicode-frame.txt" "café"
 	no_exception "unicode: no exception" "$SCRATCH/unicode-frame.txt"
+
+	# the ticket's claim, asserted in display columns: a wide row must place its separators in the
+	# same columns as the ASCII control row - in the entry table *and* in the summary table
+	check_alignment "unicode: every entry-table row puts its separators in the same columns" \
+		"$SCRATCH/unicode-frame.txt" 2
+	kill_scene unicode
+
+	# same fixture at 60 columns, where the columns no longer fit and cells are truncated/clipped:
+	# a wide glyph must not push the separators of its own row out of line there either
+	new_scene unicodenarrow 60 24 "$dir" continue --tui
+	pick_first_session unicodenarrow || { fail "unicode(60): the session picker never appeared"; return; }
+	wait_for_window unicodenarrow || { fail "unicode(60): window never rendered"; return; }
+	sleep 2
+	frame unicodenarrow "$SCRATCH/unicode-narrow-frame.txt"
+	check_alignment "unicode: entry and summary tables still line up at 60 columns" \
+		"$SCRATCH/unicode-narrow-frame.txt" 2
+	no_exception "unicode: no exception at 60 columns" "$SCRATCH/unicode-narrow-frame.txt"
+	kill_scene unicodenarrow
+
 	echo "  ---- observed unicode frame (for the PR, not an assertion) ----"
 	grep -nE '計画|タスク|café|🚀' "$SCRATCH/unicode-frame.txt" | head -5 | sed 's/^/  | /'
-
-	kill_scene unicode
 }
 
 # ---- main ------------------------------------------------------------------------------------
@@ -429,6 +468,17 @@ fi
 if [ ! -f "$DLL" ]; then
 	echo "missing $DLL - run without --no-build first" >&2
 	exit 2
+fi
+
+# The frame checker is what the alignment assertions measure with, so its own width model and both
+# directions of its verdict are proven before any scenario runs (it also fails if given no frame to
+# compare, which is the way an alignment check could otherwise pass for the wrong reason).
+echo "checking the frame checker..."
+if python3 "$FRAME_CHECKER" selftest > "$SCRATCH/frame-selftest.txt" 2>&1; then
+	pass "frame checker self-test ($(tail -1 "$SCRATCH/frame-selftest.txt" | sed 's/^selftest: //'))"
+else
+	fail "frame checker self-test - see $SCRATCH/frame-selftest.txt"
+	sed 's/^/    /' "$SCRATCH/frame-selftest.txt"
 fi
 
 # --only runs a single scenario (fast iteration while tuning an assertion)
