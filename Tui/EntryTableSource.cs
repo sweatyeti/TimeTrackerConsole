@@ -48,7 +48,7 @@ internal sealed class EntryTableSource : ITableSource
         return col switch
         {
             0 => $"#{entry.Id}",
-            1 => entry.Task,
+            1 => entry.Task ?? string.Empty,
             2 => TimeText(entry),
             3 => StatusText(entry),
             4 => string.IsNullOrEmpty(entry.Description) ? "No description" : entry.Description,
@@ -56,9 +56,13 @@ internal sealed class EntryTableSource : ITableSource
         };
     }
 
-    // the status column's rule, shared with the colour getter so text and colour cannot diverge
+    // the status column's rule, shared with the colour getter so text and colour cannot diverge.
+    // Null-safe without changing the console's rule: a null task has no logged state (same as
+    // "none"), while an empty task still counts as a real task exactly as it does in BuildEntryRow.
     internal static bool HasLoggedState(TimeEntry entry)
-        => entry.IsComplete && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
+        => entry.IsComplete
+        && entry.Task is not null
+        && !entry.Task.Equals("none", StringComparison.OrdinalIgnoreCase);
 
     private static string TimeText(TimeEntry entry)
         => $"{entry.StartTime:HH:mm} - {(entry.IsComplete ? entry.EndTime.ToString("HH:mm") : "In Progress")}";

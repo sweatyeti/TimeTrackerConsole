@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
+using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
 // Phase 2 (T2.1, T2.3, T2.5, T2.6, T2.7) of the Terminal.Gui migration: the blocking
@@ -11,14 +12,25 @@ using Terminal.Gui.Views;
 // the Cancel button) so the callers can keep the same cancel semantics as the Spectre
 // prompts (ESC cancels, nothing is mutated).
 //
-// All dialogs follow the Dialog button convention verified against 2.5.0: the LAST button
-// added is the default one (Enter), and Dialog.Result is the 0-based index of the button
-// pressed - or null when the dialog was dismissed without a button (Esc).
+// All dialogs follow the Dialog button convention verified against Terminal.Gui 2.4.17 (the version
+// this project pins): the LAST button added is the default one (Enter), and Dialog.Result is the
+// 0-based index of the button pressed - or null when the dialog was dismissed without a button (Esc).
+//
+// Geometry: field widths are capped to the driver's screen width (a fixed 60/64-wide field overflows
+// a 60-column terminal) and rows are chained with Pos.Bottom instead of hand-numbered Y literals, so
+// adding a field cannot collide with the one below it.
 internal static class EntryDialogs
 {
-    private const int FieldWidth = 60;
-    private const int ListWidth = 64;
+    private const int PreferredFieldWidth = 60;
+    private const int PreferredListWidth = 64;
     private const int MaxListRows = 12;
+
+    // never shrink a field below this - a dialog that cannot hold usable input is worse than one
+    // that overflows a pathologically small screen
+    private const int MinimumFieldWidth = 20;
+
+    // borders (2) + the 1-column inset on each side (2) + a little slack (2)
+    private const int DialogChromeColumns = 6;
 
     // T2.1/T2.3: single text field. Returns the typed text, or null when cancelled.
     public static string? PromptForText(IApplication app, TuiSchemes schemes, string title, string message, string initialValue)
@@ -27,7 +39,13 @@ internal static class EntryDialogs
         dialog.SchemeName = schemes.BaseName;
 
         Label prompt = new() { X = 1, Y = 1, Text = message, SchemeName = schemes.PromptName };
-        TextField field = new() { X = 1, Y = 2, Width = FieldWidth, Text = initialValue ?? string.Empty };
+        TextField field = new()
+        {
+            X = 1,
+            Y = Pos.Bottom(prompt) + 1,
+            Width = WidthWithinScreen(app, PreferredFieldWidth),
+            Text = initialValue ?? string.Empty
+        };
 
         dialog.Add(prompt);
         dialog.Add(field);
@@ -52,14 +70,25 @@ internal static class EntryDialogs
         using Dialog dialog = new() { Title = $"Update entry #{entry.Id}" };
         dialog.SchemeName = schemes.BaseName;
 
-        dialog.Add(new Label { X = 1, Y = 1, Text = $"Entry #{entry.Id} ({(entry.IsComplete ? "completed" : "in progress")})", SchemeName = schemes.PromptName });
+        int fieldWidth = WidthWithinScreen(app, PreferredFieldWidth);
 
-        dialog.Add(new Label { X = 1, Y = 2, Text = "Task:" });
-        TextField taskField = new() { X = 1, Y = 3, Width = FieldWidth, Text = entry.Task };
+        Label header = new()
+        {
+            X = 1,
+            Y = 1,
+            Text = $"Entry #{entry.Id} ({(entry.IsComplete ? "completed" : "in progress")})",
+            SchemeName = schemes.PromptName
+        };
+        dialog.Add(header);
+
+        Label taskLabel = new() { X = 1, Y = Pos.Bottom(header) + 1, Text = "Task:" };
+        TextField taskField = new() { X = 1, Y = Pos.Bottom(taskLabel) + 1, Width = fieldWidth, Text = entry.Task };
+        dialog.Add(taskLabel);
         dialog.Add(taskField);
 
-        dialog.Add(new Label { X = 1, Y = 4, Text = "Description:" });
-        TextField descriptionField = new() { X = 1, Y = 5, Width = FieldWidth, Text = entry.Description };
+        Label descriptionLabel = new() { X = 1, Y = Pos.Bottom(taskField) + 1, Text = "Description:" };
+        TextField descriptionField = new() { X = 1, Y = Pos.Bottom(descriptionLabel) + 1, Width = fieldWidth, Text = entry.Description };
+        dialog.Add(descriptionLabel);
         dialog.Add(descriptionField);
 
         CheckBox? loggedField = null;
@@ -68,7 +97,7 @@ internal static class EntryDialogs
             loggedField = new CheckBox
             {
                 X = 1,
-                Y = 6,
+                Y = Pos.Bottom(descriptionField) + 1,
                 Text = "Logged",
                 Value = entry.Logged ? CheckState.Checked : CheckState.UnChecked
             };
@@ -100,13 +129,14 @@ internal static class EntryDialogs
         using Dialog dialog = new() { Title = title };
         dialog.SchemeName = schemes.BaseName;
 
-        dialog.Add(new Label { X = 1, Y = 1, Text = message, SchemeName = schemes.PromptName });
+        Label prompt = new() { X = 1, Y = 1, Text = message, SchemeName = schemes.PromptName };
+        dialog.Add(prompt);
 
         ListView list = new()
         {
             X = 1,
-            Y = 2,
-            Width = ListWidth,
+            Y = Pos.Bottom(prompt) + 1,
+            Width = WidthWithinScreen(app, PreferredListWidth),
             Height = Math.Min(items.Count, MaxListRows) + 1,
             Source = new ListWrapper<string>(new ObservableCollection<string>(items))
         };
@@ -138,7 +168,7 @@ internal static class EntryDialogs
     }
 
     // T2.4/T2.6: yes/no confirmation, as MessageBox. The LAST button is the default one
-    // (verified against 2.5.0), so the button order is chosen to reproduce the Spectre
+    // (verified against 2.4.17), so the button order is chosen to reproduce the Spectre
     // AnsiConsole.Confirm(defaultValue: ...) calls of the same flows: the destructive delete
     // question defaults to cancel, the restore question defaults to yes.
     public static bool Confirm(IApplication app, string title, string message, string affirmative, string negative, bool defaultIsAffirmative)
@@ -158,6 +188,17 @@ internal static class EntryDialogs
     public static void ShowMessage(IApplication app, string title, string message)
     {
         MessageBox.Query(app, title, message, new[] { "OK" });
+    }
+
+    // The screen width is only known once a driver exists; before that (and in a host without one)
+    // keep the preferred width rather than guessing.
+    private static int WidthWithinScreen(IApplication app, int preferred)
+    {
+        int screenWidth = app.Screen.Width;
+
+        if(screenWidth <= 0) return preferred;
+
+        return Math.Max(MinimumFieldWidth, Math.Min(preferred, screenWidth - DialogChromeColumns));
     }
 
     internal readonly record struct EntryUpdateResult(string Task, string Description, bool? Logged);

@@ -40,7 +40,9 @@ internal sealed class SummaryTableSource : ITableSource
         var taskQuery =
             from entry in entries
             where entry.IsComplete == true && !entry.IsDeleted
-            group entry by entry.Task.ToLower() into taskGroup
+            // null-safe key: the display/summary layer never assumes a non-null task string, even
+            // though SnapshotNormalizer and the update transitions both coalesce it
+            group entry by (entry.Task ?? string.Empty).ToLower() into taskGroup
             select new
             {
                 Task = taskGroup.Key,

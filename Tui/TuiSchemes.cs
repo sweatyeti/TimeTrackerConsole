@@ -99,7 +99,6 @@ internal sealed class TuiSchemes
         BannerActiveName = $"{prefix}-banner-active";
         BannerInactiveName = $"{prefix}-banner-inactive";
         SummaryHeaderName = $"{prefix}-summary-header";
-        SummaryUnloggedName = $"{prefix}-summary-unlogged";
         TotalsName = $"{prefix}-totals";
         PromptName = $"{prefix}-prompt";
 
@@ -141,7 +140,6 @@ internal sealed class TuiSchemes
         Register(BannerActiveName, BannerActiveScheme);
         Register(BannerInactiveName, BannerInactiveScheme);
         Register(SummaryHeaderName, SummaryHeaderScheme);
-        Register(SummaryUnloggedName, _summaryUnloggedScheme);
         Register(TotalsName, TotalsScheme);
         Register(PromptName, PromptScheme);
     }
@@ -153,12 +151,12 @@ internal sealed class TuiSchemes
     public string BannerActiveName { get; }
     public string BannerInactiveName { get; }
     public string SummaryHeaderName { get; }
-    public string SummaryUnloggedName { get; }
     public string TotalsName { get; }
     public string PromptName { get; }
 
     // the same schemes as objects: TableStyle.HeaderScheme and ITableSource.RowColorGetter
-    // take Scheme instances rather than names
+    // take Scheme instances rather than names. SummaryRowScheme returns the unlogged row scheme
+    // directly, so unlike the banner/header/totals/prompt schemes it never needs a registered name.
     public Scheme SummaryHeaderScheme { get; }
     public Scheme BannerActiveScheme { get; }
     public Scheme BannerInactiveScheme { get; }
