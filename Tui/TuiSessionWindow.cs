@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
@@ -184,8 +185,8 @@ internal sealed class TuiSessionWindow
     private Label? _banner;
     private TableView? _summary;
     private Label? _totals;
-    private ListView? _entries;
-    private EntryListDataSource? _entrySource;
+    private TableView? _entries;
+    private EntryTableSource? _entrySource;
     private SummaryTableSource? _summarySource;
 
     // builds every region once, then hands over to Refresh for the first paint
@@ -238,14 +239,17 @@ internal sealed class TuiSessionWindow
         };
         _window.Add(_totals);
 
-        _entrySource = new EntryListDataSource(_session.VisibleEntriesNewestFirst, _schemes);
-        _entries = new ListView
+        _entrySource = new EntryTableSource(_session.VisibleEntriesNewestFirst);
+        _entries = new TableView
         {
             X = 0,
             Y = Pos.Bottom(_totals) + 1,
             Width = Dim.Fill(),
             Height = Dim.Fill(1),
-            Source = _entrySource,
+            Table = _entrySource,
+            Style = EntryTableStyle(),
+            FullRowSelect = true,
+            MultiSelect = false,
             SchemeName = _schemes.BaseName
         };
 
@@ -254,7 +258,7 @@ internal sealed class TuiSessionWindow
         _entries.Accepting += (_, args) =>
         {
             args.Handled = true;
-            UpdateSelectedEntry(_entries.SelectedItem ?? -1);
+            UpdateSelectedEntry(SelectedEntryRow());
         };
         _window.Add(_entries);
 
@@ -274,6 +278,52 @@ internal sealed class TuiSessionWindow
     // the art is a fixed 5-row block; deriving the height from the string keeps the glyph
     // table in Session as the single source of truth
     private static int ArtHeightInLines(string art) => art.Count(character => character == '\n') + 1;
+
+    // The entry table's look and per-cell colours. No headers and no horizontal rules: the entry
+    // list is a list, not a captioned grid. The vertical lines are what delimit the columns now
+    // that the old " | " separators are gone.
+    private TableStyle EntryTableStyle() => new()
+    {
+        ShowHeaders = false,
+        ShowHorizontalHeaderOverline = false,
+        ShowHorizontalHeaderUnderline = false,
+        ShowHorizontalBottomLine = false,
+        ShowVerticalCellLines = true,
+        ShowVerticalCellLineForFirstColumn = true,
+        ShowVerticalCellLineForLastColumn = false,
+        ExpandLastColumn = false,
+        ColumnStyles = new Dictionary<int, ColumnStyle>
+        {
+            [0] = new ColumnStyle { ColorGetter = _ => _schemes.CellSecondaryScheme },
+            [1] = new ColumnStyle { ColorGetter = _ => _schemes.CellPlainScheme },
+            [2] = new ColumnStyle { ColorGetter = args => TimeScheme(args.RowIndex) },
+            [3] = new ColumnStyle { ColorGetter = args => StatusScheme(args.RowIndex) },
+            [4] = new ColumnStyle { ColorGetter = args => DescriptionScheme(args.RowIndex) }
+        }
+    };
+
+    // in-progress entries show their time range in the in-progress colour, everything else plain -
+    // the same rule the hand-rolled row builder applied to the time span
+    private Scheme TimeScheme(int row)
+        => _entrySource?.EntryAt(row) is { IsComplete: false } ? _schemes.CellInProgressScheme : _schemes.CellPlainScheme;
+
+    // Logged / Unlogged / N/A, colour-coded exactly as the old status span was
+    private Scheme StatusScheme(int row)
+    {
+        TimeEntry? entry = _entrySource?.EntryAt(row);
+        if(entry is null || !EntryTableSource.HasLoggedState(entry)) return _schemes.CellMutedScheme;
+
+        return entry.Logged ? _schemes.CellPositiveScheme : _schemes.CellUnloggedScheme;
+    }
+
+    private Scheme DescriptionScheme(int row)
+        => string.IsNullOrEmpty(_entrySource?.EntryAt(row)?.Description)
+            ? _schemes.CellMutedScheme
+            : _schemes.CellPlainScheme;
+
+    // The table's selection is Value (TableSelection.SelectedCell); Cursor is the terminal caret's
+    // position, not the selected row - reading it sent Enter to row 0 regardless of the highlight.
+    private int SelectedEntryRow() => _entries?.Value?.SelectedCell.Y ?? -1;
 
     private static string FormatMinutes(double minutes) => $"{TimeSpan.FromMinutes(minutes):hh\\:mm}";
 
@@ -486,10 +536,13 @@ internal sealed class TuiSessionWindow
         // keep the highlight on the same entry where possible; a new entry (which sorts to the
         // top) falls back to the first row, as DisplayMainMenu does. Only re-applied when it is
         // actually different, so a refresh cannot fight the user's own navigation.
-        if(_entrySource.Count > 0)
+        if(_entrySource.Rows > 0)
         {
             int target = RestoredSelectionIndex(_session.VisibleEntriesNewestFirst);
-            if(_entries.SelectedItem != target) _entries.SelectedItem = target;
+            if(SelectedEntryRow() != target)
+            {
+                _entries.Value = new TableSelection(new Point(0, target));
+            }
         }
 
         _window.SetNeedsDraw();
